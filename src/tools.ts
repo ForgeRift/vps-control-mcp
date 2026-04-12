@@ -200,16 +200,17 @@ async function gitLog(count: number): Promise<string> {
   return stdout.trim();
 }
 
-async function gitPull(dryRun: boolean): Promise<string> {
+async function gitPull(dryRun: boolean, directory?: string): Promise<string> {
+  const dir = directory?.trim() || CONFIG.APP_DIR;
   if (dryRun) {
     return [
       'DRY RUN — nothing executed.',
       'Would run: git pull origin main',
-      `Working directory: ${CONFIG.APP_DIR}`,
+      `Working directory: ${dir}`,
       'Call with dry_run=false to execute.',
     ].join('\n');
   }
-  const { stdout, stderr } = await exec('git', ['-C', CONFIG.APP_DIR, 'pull', 'origin', 'main']);
+  const { stdout, stderr } = await exec('git', ['-C', dir, 'pull', 'origin', 'main']);
   return [stdout, stderr].filter(Boolean).join('\n').trim();
 }
 
@@ -467,7 +468,8 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        dry_run: { description: 'Default true. Set false only after previewing.' },
+        dry_run:   { description: 'Default true. Set false only after previewing.' },
+        directory: { type: 'string', description: `Optional. Absolute path to repo. Defaults to ${CONFIG.APP_DIR}.` },
       },
       required: [] as string[],
     },
@@ -581,7 +583,7 @@ export async function executeTool(
         return await gitLog(parseNum(args.count, 10));
 
       case 'git_pull':
-        return await gitPull(parseBool(args.dry_run, true));
+        return await gitPull(parseBool(args.dry_run, true), args.directory as string | undefined);
 
       case 'git_push':
         return await gitPush(
