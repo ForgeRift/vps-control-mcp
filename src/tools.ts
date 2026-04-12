@@ -30,6 +30,24 @@ function truncate(output: string): string {
   );
 }
 
+// ─── Type coercion helpers ────────────────────────────────────────────────────
+// MCP frameworks sometimes serialise booleans/numbers as strings.
+// These helpers normalise the value rather than relying on a bare type cast.
+
+function parseBool(val: unknown, defaultVal: boolean): boolean {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') return val.toLowerCase() === 'true';
+  return defaultVal;
+}
+
+function parseNum(val: unknown, defaultVal: number): number {
+  if (val === undefined || val === null) return defaultVal;
+  if (typeof val === 'number') return val;
+  const n = Number(val);
+  return isNaN(n) ? defaultVal : n;
+}
+
 // ─── Validators ───────────────────────────────────────────────────────────────
 
 function validatePath(filePath: string): string {
@@ -395,7 +413,6 @@ export const TOOLS = [
           description: `Which process to read. Allowed: ${CONFIG.ALLOWED_PROCESSES.join(', ')}`,
         },
         lines: {
-          type: 'number',
           description: `Lines to retrieve. Default 20. Hard max ${CONFIG.MAX_LOG_LINES}.`,
         },
       },
@@ -450,7 +467,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        dry_run: { type: 'boolean', description: 'Default true. Set false only after previewing.' },
+        dry_run: { description: 'Default true. Set false only after previewing.' },
       },
       required: [] as string[],
     },
@@ -461,7 +478,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        dry_run:     { type: 'boolean', description: 'Default true. Set false only after previewing.' },
+        dry_run: { description: 'Default true. Set false only after previewing.' },
         description: { type: 'string',  description: 'Required when dry_run=false. What is being pushed and why.' },
       },
       required: [] as string[],
@@ -477,7 +494,7 @@ export const TOOLS = [
           type: 'string',
           description: `Process to restart. Allowed: ${CONFIG.ALLOWED_PROCESSES.join(', ')}`,
         },
-        dry_run: { type: 'boolean', description: 'Default true. Set false only after previewing.' },
+        dry_run: { description: 'Default true. Set false only after previewing.' },
       },
       required: ['process_name'],
     },
@@ -495,7 +512,7 @@ export const TOOLS = [
       properties: {
         command:       { type: 'string', description: 'Command to run. Destructive patterns are blocked server-side.' },
         justification: { type: 'string', description: 'Why structured tools cannot cover this. Min 10 chars.' },
-        dry_run:       { type: 'boolean', description: 'Default true. Set false only after previewing.' },
+        dry_run: { description: 'Default true. Set false only after previewing.' },
       },
       required: ['command', 'justification'],
     },
@@ -506,7 +523,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        dry_run:     { type: 'boolean', description: 'Default true. Set false only after previewing the sequence.' },
+        dry_run: { description: 'Default true. Set false only after previewing the sequence.' },
         description: { type: 'string',  description: 'Required. What is being deployed and why.' },
       },
       required: ['description'] as string[],
@@ -518,7 +535,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        dry_run:     { type: 'boolean', description: 'Default true. Set false only after previewing the sequence.' },
+        dry_run: { description: 'Default true. Set false only after previewing the sequence.' },
         description: { type: 'string',  description: 'Required. What is being deployed and why.' },
       },
       required: ['description'] as string[],
@@ -540,42 +557,42 @@ export async function executeTool(
       case 'get_recent_errors':
         return await getRecentErrors(
           args.process_name as string,
-          (args.lines as number) ?? 20
+          parseNum(args.lines, 20)
         );
 
       case 'read_file_section':
         return await readFileSection(
           args.file_path as string,
-          args.start_line as number,
-          args.end_line as number
+          parseNum(args.start_line, 1),
+          parseNum(args.end_line, 1)
         );
 
       case 'search_file':
         return await searchFile(
           args.file_path as string,
           args.pattern as string,
-          (args.context_lines as number) ?? 3
+          parseNum(args.context_lines, 3)
         );
 
       case 'git_status':
         return await gitStatus();
 
       case 'git_log':
-        return await gitLog((args.count as number) ?? 10);
+        return await gitLog(parseNum(args.count, 10));
 
       case 'git_pull':
-        return await gitPull((args.dry_run as boolean) ?? true);
+        return await gitPull(parseBool(args.dry_run, true));
 
       case 'git_push':
         return await gitPush(
-          (args.dry_run as boolean) ?? true,
+          parseBool(args.dry_run, true),
           (args.description as string) ?? ''
         );
 
       case 'restart_process':
         return await restartProcess(
           args.process_name as string,
-          (args.dry_run as boolean) ?? true
+          parseBool(args.dry_run, true)
         );
 
       case 'get_system_health':
@@ -585,18 +602,18 @@ export async function executeTool(
         return await runApprovedCommand(
           args.command as string,
           args.justification as string,
-          (args.dry_run as boolean) ?? true
+          parseBool(args.dry_run, true)
         );
 
       case 'deploy':
         return await deploySharpEdge(
-          (args.dry_run as boolean) ?? true,
+          parseBool(args.dry_run, true),
           (args.description as string) ?? ''
         );
 
       case 'deploy_vps_mcp':
         return await deployVpsMcp(
-          (args.dry_run as boolean) ?? true,
+          parseBool(args.dry_run, true),
           (args.description as string) ?? ''
         );
 
