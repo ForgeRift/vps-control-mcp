@@ -16,7 +16,7 @@ export const CONFIG = {
   MAX_CUSTOM_COMMANDS_PER_SESSION: 3,
 
   // Allowed PM2 process names — edit this list to match your setup
-  ALLOWED_PROCESSES:            ['scanner', 'newsTrigger', 'autoResolver', 'vps-mcp'],
+  ALLOWED_PROCESSES:            ['sharpedge-api', 'vps-mcp'],
 };
 
 // Derived — do not edit directly

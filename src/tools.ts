@@ -5,6 +5,17 @@ import { promisify } from 'util';
 import { CONFIG, ALLOWED_READ_DIRS } from './config.js';
 
 const exec = promisify(execFile);
+function runCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const cb = (err: Error | null, stdout: string, stderr: string) => {
+      if (err) { reject(err); return; }
+      resolve({ stdout: stdout || '', stderr: stderr || '' });
+    };
+    if (cwd) { execFile(cmd, args, { cwd }, cb); }
+    else      { execFile(cmd, args, cb); }
+  });
+}
+
 
 // Session-scoped custom command counter (resets on process restart)
 let customCommandCount = 0;
@@ -263,6 +274,108 @@ async function runApprovedCommand(
   return truncate(output.trim() || '[Command completed with no output]');
 }
 
+// ─── Deploy Tools ──────────────────────────────────────────────────────────────────
+
+async function deploySharpEdge(dryRun: boolean, description: string): Promise<string> {
+  if (!description || description.trim().length < 5) {
+    throw new Error('description is required (min 5 chars) — describe what is being deployed.');
+  }
+
+  const apiServerDir = path.join(CONFIG.APP_DIR, 'artifacts', 'api-server');
+
+  const steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }> = [
+    { label: 'git pull origin main', cmd: 'git',  args: ['-C', CONFIG.APP_DIR, 'pull', 'origin', 'main'] },
+    { label: 'pnpm install',         cmd: 'pnpm', args: ['install'],     cwd: CONFIG.APP_DIR            },
+    { label: 'node build.mjs',       cmd: 'node', args: ['build.mjs'],   cwd: apiServerDir              },
+    { label: 'pm2 restart all',      cmd: 'pm2',  args: ['restart', 'all']                              },
+    { label: 'pm2 status',           cmd: 'pm2',  args: ['status']                                      },
+  ];
+
+  if (dryRun) {
+    const stepList = steps.map((s, i) =>
+      '  ' + (i + 1) + '. ' + s.label + (s.cwd ? ' (cwd: ' + s.cwd + ')' : '')
+    ).join('\n');
+    return [
+      'DRY RUN — nothing executed.',
+      'Description: ' + description,
+      '',
+      'Would run the following deploy sequence:',
+      stepList,
+      '',
+      'Call with dry_run=false to execute.',
+    ].join('\n');
+  }
+
+  const results: string[] = ['=== SharpEdge Deploy: ' + description + ' ===', ''];
+
+  for (const step of steps) {
+    results.push('--- ' + step.label + ' ---');
+    try {
+      const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
+      results.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
+    } catch (err) {
+      results.push('FAILED: ' + (err as Error).message);
+      results.push('');
+      results.push('Deploy aborted. Remaining steps were not executed.');
+      return truncate(results.join('\n'));
+    }
+    results.push('');
+  }
+
+  results.push('=== Deploy complete ===');
+  return truncate(results.join('\n'));
+}
+
+async function deployVpsMcp(dryRun: boolean, description: string): Promise<string> {
+  if (!description || description.trim().length < 5) {
+    throw new Error('description is required (min 5 chars) — describe what is being deployed.');
+  }
+
+  const VPS_MCP_DIR = '/root/vps-control-mcp';
+
+  const steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }> = [
+    { label: 'git pull origin main', cmd: 'git', args: ['-C', VPS_MCP_DIR, 'pull', 'origin', 'main'] },
+    { label: 'npm install',          cmd: 'npm', args: ['install'],       cwd: VPS_MCP_DIR            },
+    { label: 'npm run build',        cmd: 'npm', args: ['run', 'build'],  cwd: VPS_MCP_DIR            },
+    { label: 'pm2 restart vps-mcp', cmd: 'pm2', args: ['restart', 'vps-mcp']                         },
+    { label: 'pm2 status',           cmd: 'pm2', args: ['status']                                     },
+  ];
+
+  if (dryRun) {
+    const stepList = steps.map((s, i) =>
+      '  ' + (i + 1) + '. ' + s.label + (s.cwd ? ' (cwd: ' + s.cwd + ')' : '')
+    ).join('\n');
+    return [
+      'DRY RUN — nothing executed.',
+      'Description: ' + description,
+      '',
+      'Would run the following deploy sequence:',
+      stepList,
+      '',
+      'Call with dry_run=false to execute.',
+    ].join('\n');
+  }
+
+  const results: string[] = ['=== vps-control-mcp Deploy: ' + description + ' ===', ''];
+
+  for (const step of steps) {
+    results.push('--- ' + step.label + ' ---');
+    try {
+      const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
+      results.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
+    } catch (err) {
+      results.push('FAILED: ' + (err as Error).message);
+      results.push('');
+      results.push('Deploy aborted. Remaining steps were not executed.');
+      return truncate(results.join('\n'));
+    }
+    results.push('');
+  }
+
+  results.push('=== Deploy complete ===');
+  return truncate(results.join('\n'));
+}
+
 // ─── Tool Definitions (MCP schema) ───────────────────────────────────────────
 
 export const TOOLS = [
@@ -387,6 +500,30 @@ export const TOOLS = [
       required: ['command', 'justification'],
     },
   },
+  {
+    name: 'deploy',
+    description: 'Run the full SharpEdge deploy sequence: git pull → pnpm install → node build.mjs → pm2 restart all → pm2 status. Always dry_run=true first to preview.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run:     { type: 'boolean', description: 'Default true. Set false only after previewing the sequence.' },
+        description: { type: 'string',  description: 'Required. What is being deployed and why.' },
+      },
+      required: ['description'] as string[],
+    },
+  },
+  {
+    name: 'deploy_vps_mcp',
+    description: 'Run the full vps-control-mcp deploy sequence: git pull → npm install → npm run build → pm2 restart vps-mcp → pm2 status. Always dry_run=true first to preview.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run:     { type: 'boolean', description: 'Default true. Set false only after previewing the sequence.' },
+        description: { type: 'string',  description: 'Required. What is being deployed and why.' },
+      },
+      required: ['description'] as string[],
+    },
+  },
 ];
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
@@ -449,6 +586,18 @@ export async function executeTool(
           args.command as string,
           args.justification as string,
           (args.dry_run as boolean) ?? true
+        );
+
+      case 'deploy':
+        return await deploySharpEdge(
+          (args.dry_run as boolean) ?? true,
+          (args.description as string) ?? ''
+        );
+
+      case 'deploy_vps_mcp':
+        return await deployVpsMcp(
+          (args.dry_run as boolean) ?? true,
+          (args.description as string) ?? ''
         );
 
       default:

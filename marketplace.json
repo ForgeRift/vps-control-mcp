@@ -1,0 +1,14 @@
+{
+  "plugins": [
+    {
+      "id": "vps-control",
+      "name": "VPS Control (SharpEdge DO Shell)",
+      "description": "Connect Claude to the SharpEdge DO Shell (DigitalOcean VPS) via MCP — run commands, inspect PM2 logs, restart processes, and manage the server from Cowork.",
+      "source": {
+        "type": "github",
+        "repo": "claudedussy/vps-control-mcp",
+        "ref": "main"
+      }
+    }
+  ]
+}
