@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import { fileURLToPath } from 'url';
 import { CONFIG, ALLOWED_READ_DIRS } from './config.js';
 
 const exec = promisify(execFile);
@@ -31,6 +32,48 @@ interface DeployJob {
 }
 const deployJobs = new Map<string, DeployJob>();
 
+// ─── File-based job persistence (VC-8) ───────────────────────────────────────
+// deploy_vps_mcp restarts this process mid-deploy, wiping the in-memory Map.
+// We persist each job to a JSON file so get_deploy_status can recover it.
+
+const __tools_dir = path.dirname(fileURLToPath(import.meta.url));
+const JOBS_FILE   = path.join(__tools_dir, '..', 'deploy-jobs.json');
+
+function persistJob(job: DeployJob): void {
+  try {
+    let store: Record<string, unknown> = {};
+    if (fs.existsSync(JOBS_FILE)) {
+      store = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8')) as Record<string, unknown>;
+    }
+    store[job.id] = {
+      id:          job.id,
+      type:        job.type,
+      description: job.description,
+      startedAt:   job.startedAt.toISOString(),
+      status:      job.status,
+      log:         job.log,
+    };
+    fs.writeFileSync(JOBS_FILE, JSON.stringify(store, null, 2), 'utf8');
+  } catch { /* fail-silent -- persistence is best-effort */ }
+}
+
+function loadJobFromFile(jobId: string): DeployJob | null {
+  try {
+    if (!fs.existsSync(JOBS_FILE)) return null;
+    const store = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8')) as Record<string, Record<string, unknown>>;
+    const raw   = store[jobId];
+    if (!raw) return null;
+    return {
+      id:          raw['id']          as string,
+      type:        raw['type']        as 'sharpedge' | 'vps-mcp',
+      description: raw['description'] as string,
+      startedAt:   new Date(raw['startedAt'] as string),
+      status:      raw['status']      as 'running' | 'success' | 'failed',
+      log:         raw['log']         as string[],
+    };
+  } catch { return null; }
+}
+
 function startDeployJob(
   type: 'sharpedge' | 'vps-mcp',
   description: string,
@@ -45,6 +88,7 @@ function startDeployJob(
     log: [`=== ${label} Deploy: ${description} ===`, ''],
   };
   deployJobs.set(id, job);
+  persistJob(job); // initial write
 
   // Fire-and-forget — returns before steps complete to avoid MCP timeout
   (async () => {
@@ -53,17 +97,20 @@ function startDeployJob(
       try {
         const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
         job.log.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
+        persistJob(job); // update after each step
       } catch (err) {
         job.log.push('FAILED: ' + (err as Error).message);
         job.log.push('');
         job.log.push('Deploy aborted. Remaining steps were not executed.');
         job.status = 'failed';
+        persistJob(job); // persist failed state
         return;
       }
       job.log.push('');
     }
     job.log.push('=== Deploy complete ===');
     job.status = 'success';
+    persistJob(job); // persist success state
   })().catch(err => {
     job.log.push('Unexpected error: ' + (err as Error).message);
     job.status = 'failed';
@@ -451,21 +498,25 @@ async function getDeployStatus(jobId: string): Promise<string> {
     return 'Deploy jobs this session:\n' + list.join('\n');
   }
 
-  const job = deployJobs.get(jobId.trim());
+  const job = deployJobs.get(jobId.trim()) ?? loadJobFromFile(jobId.trim());
+  const fromFile  = !deployJobs.has(jobId.trim()) && !!job;
   if (!job) {
     const ids = [...deployJobs.keys()].join(', ') || '(none)';
     return `No job found with id "${jobId}". Known job IDs: ${ids}`;
   }
 
   const elapsed = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
+  const selfRestartNote = fromFile && job.status === 'running'
+    ? '\n[Note: job was still "running" when vps-mcp restarted itself (VC-8). Deploy likely succeeded — verify with get_pm2_status.]'
+    : '';
   return [
     `Job:     ${job.id}`,
     `Type:    ${job.type}`,
-    `Status:  ${job.status}`,
+    `Status:  ${job.status}` + (fromFile ? ' (recovered from file)' : ''),
     `Elapsed: ${elapsed}s`,
     '',
     '--- Log ---',
-    job.log.join('\n'),
+    job.log.join('\n') + selfRestartNote,
   ].join('\n');
 }
 
