@@ -152,7 +152,10 @@ function parseNum(val: unknown, defaultVal: number): number {
 
 function validatePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  const allowed = ALLOWED_READ_DIRS.some(dir => resolved.startsWith(path.resolve(dir)));
+  const allowed = ALLOWED_READ_DIRS.some(dir => {
+    const d = path.resolve(dir);
+    return resolved === d || resolved.startsWith(d + '/');
+  });
   if (!allowed) {
     throw new Error(
       `Path not permitted: "${filePath}". Reads are restricted to: ${ALLOWED_READ_DIRS.join(', ')}`
@@ -171,9 +174,10 @@ function validateProcess(name: string): void {
 
 // Patterns that are hard-blocked in the escape hatch — no override
 const BLOCKED_PATTERNS: RegExp[] = [
-  /\brm\b/,               // delete files
-  /\brmdir\b/,
-  /\bunlink\b/,
+  /\brm/,                  // delete files (rm, rmSync, rmdirSync)
+  /\bunlink/,              // unlink, unlinkSync
+  /\bnode\s+-e/,          // node inline code execution bypass
+  /\bpython3?\s+-c/,      // python inline code execution bypass
   /\bdd\b/,               // disk operations
   /\bmkfs\b/,
   /\bfdisk\b/,
