@@ -20,6 +20,59 @@ function runCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: st
 // Session-scoped custom command counter (resets on process restart)
 let customCommandCount = 0;
 
+// ─── Async Deploy Job Store ───────────────────────────────────────────────────
+interface DeployJob {
+  id:          string;
+  type:        'sharpedge' | 'vps-mcp';
+  description: string;
+  startedAt:   Date;
+  status:      'running' | 'success' | 'failed';
+  log:         string[];
+}
+const deployJobs = new Map<string, DeployJob>();
+
+function startDeployJob(
+  type: 'sharpedge' | 'vps-mcp',
+  description: string,
+  steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }>
+): string {
+  const id = `deploy-${Date.now()}`;
+  const label = type === 'sharpedge' ? 'SharpEdge' : 'vps-control-mcp';
+  const job: DeployJob = {
+    id, type, description,
+    startedAt: new Date(),
+    status: 'running',
+    log: [`=== ${label} Deploy: ${description} ===`, ''],
+  };
+  deployJobs.set(id, job);
+
+  // Fire-and-forget — returns before steps complete to avoid MCP timeout
+  (async () => {
+    for (const step of steps) {
+      job.log.push('--- ' + step.label + ' ---');
+      try {
+        const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
+        job.log.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
+      } catch (err) {
+        job.log.push('FAILED: ' + (err as Error).message);
+        job.log.push('');
+        job.log.push('Deploy aborted. Remaining steps were not executed.');
+        job.status = 'failed';
+        return;
+      }
+      job.log.push('');
+    }
+    job.log.push('=== Deploy complete ===');
+    job.status = 'success';
+  })().catch(err => {
+    job.log.push('Unexpected error: ' + (err as Error).message);
+    job.status = 'failed';
+  });
+
+  return id;
+}
+
+
 // ─── Output Safety ────────────────────────────────────────────────────────────
 
 function truncate(output: string): string {
@@ -327,24 +380,18 @@ async function deploySharpEdge(dryRun: boolean, description: string): Promise<st
     ].join('\n');
   }
 
-  const results: string[] = ['=== SharpEdge Deploy: ' + description + ' ===', ''];
-
-  for (const step of steps) {
-    results.push('--- ' + step.label + ' ---');
-    try {
-      const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
-      results.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
-    } catch (err) {
-      results.push('FAILED: ' + (err as Error).message);
-      results.push('');
-      results.push('Deploy aborted. Remaining steps were not executed.');
-      return truncate(results.join('\n'));
-    }
-    results.push('');
-  }
-
-  results.push('=== Deploy complete ===');
-  return truncate(results.join('\n'));
+  const jobId = startDeployJob('sharpedge', description, steps);
+  const stepList = steps.map((s, i) => '  ' + (i + 1) + '. ' + s.label).join('\n');
+  return [
+    'Deploy job started: ' + jobId,
+    'Description: ' + description,
+    '',
+    'Steps running in background:',
+    stepList,
+    '',
+    'Use get_deploy_status with job_id="' + jobId + '" to check progress.',
+    'Typical deploy takes 90–150 seconds.',
+  ].join('\n');
 }
 
 async function deployVpsMcp(dryRun: boolean, description: string): Promise<string> {
@@ -377,24 +424,49 @@ async function deployVpsMcp(dryRun: boolean, description: string): Promise<strin
     ].join('\n');
   }
 
-  const results: string[] = ['=== vps-control-mcp Deploy: ' + description + ' ===', ''];
+  const jobId = startDeployJob('vps-mcp', description, steps);
+  const stepList = steps.map((s, i) => '  ' + (i + 1) + '. ' + s.label).join('\n');
+  return [
+    'Deploy job started: ' + jobId,
+    'Description: ' + description,
+    '',
+    'Steps running in background:',
+    stepList,
+    '',
+    'Use get_deploy_status with job_id="' + jobId + '" to check progress.',
+    'Typical deploy takes 60–90 seconds.',
+  ].join('\n');
+}
 
-  for (const step of steps) {
-    results.push('--- ' + step.label + ' ---');
-    try {
-      const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
-      results.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
-    } catch (err) {
-      results.push('FAILED: ' + (err as Error).message);
-      results.push('');
-      results.push('Deploy aborted. Remaining steps were not executed.');
-      return truncate(results.join('\n'));
-    }
-    results.push('');
+async function getDeployStatus(jobId: string): Promise<string> {
+  if (!jobId || !jobId.trim()) {
+    // List all jobs if no ID given
+    if (deployJobs.size === 0) return 'No deploy jobs this session.';
+    const list = [...deployJobs.values()]
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+      .map(j => {
+        const elapsed = Math.round((Date.now() - j.startedAt.getTime()) / 1000);
+        return `  ${j.id}  [${j.status}]  ${j.type}  ${elapsed}s ago  "${j.description}"`;
+      });
+    return 'Deploy jobs this session:\n' + list.join('\n');
   }
 
-  results.push('=== Deploy complete ===');
-  return truncate(results.join('\n'));
+  const job = deployJobs.get(jobId.trim());
+  if (!job) {
+    const ids = [...deployJobs.keys()].join(', ') || '(none)';
+    return `No job found with id "${jobId}". Known job IDs: ${ids}`;
+  }
+
+  const elapsed = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
+  return [
+    `Job:     ${job.id}`,
+    `Type:    ${job.type}`,
+    `Status:  ${job.status}`,
+    `Elapsed: ${elapsed}s`,
+    '',
+    '--- Log ---',
+    job.log.join('\n'),
+  ].join('\n');
 }
 
 // ─── Tool Definitions (MCP schema) ───────────────────────────────────────────
@@ -545,6 +617,17 @@ export const TOOLS = [
       required: ['description'] as string[],
     },
   },
+  {
+    name: 'get_deploy_status',
+    description: 'Check the status and log of a background deploy job started by deploy or deploy_vps_mcp. Pass job_id from the deploy response. Omit job_id to list all jobs this session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'Job ID returned by deploy or deploy_vps_mcp. Omit to list all jobs.' },
+      },
+      required: [] as string[],
+    },
+  },
 ];
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
@@ -620,6 +703,9 @@ export async function executeTool(
           parseBool(args.dry_run, true),
           (args.description as string) ?? ''
         );
+
+      case 'get_deploy_status':
+        return await getDeployStatus((args.job_id as string) ?? '');
 
       default:
         return `Unknown tool: "${name}". Available tools: ${TOOLS.map(t => t.name).join(', ')}`;
