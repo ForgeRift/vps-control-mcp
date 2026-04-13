@@ -278,8 +278,8 @@ async function runApprovedCommand(
     ].join('\n');
   }
 
-  customCommandCount++;
-  if (customCommandCount > CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION) {
+  // Pre-check: reject before executing — limit reached commands never run and never cost quota
+  if (customCommandCount >= CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION) {
     throw new Error(
       `Custom command session limit (${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION}) reached. ` +
       `Use structured tools, or ask the user to run this command manually.`
@@ -289,6 +289,8 @@ async function runApprovedCommand(
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
   const { stdout, stderr } = await exec(cmd, args);
+  // Only increment after successful execution — failed commands do not consume quota
+  customCommandCount++;
   const output = [stdout, stderr].filter(Boolean).join('\n');
   return truncate(output.trim() || '[Command completed with no output]');
 }
