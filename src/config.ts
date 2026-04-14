@@ -18,7 +18,6 @@ export const CONFIG = {
   MAX_OUTPUT_CHARS: 3000,
 
   // Escape hatch rate limit — configurable via env var
-  MAX_CUSTOM_COMMANDS_PER_SESSION: parseInt(process.env.MAX_CUSTOM_COMMANDS_PER_SESSION || '10'),
 
   // Allowed PM2 process names — set ALLOWED_PROCESSES env var as comma-separated list
   // e.g. ALLOWED_PROCESSES=my-api,my-worker
