@@ -18,6 +18,8 @@ function runCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: st
 }
 
 
+// Session-scoped custom command counter (resets on process restart)
+let customCommandCount = 0;
 
 // ─── Async Deploy Job Store ───────────────────────────────────────────────────
 interface DeployJob {
@@ -196,7 +198,10 @@ const BLOCKED_PATTERNS: RegExp[] = [
 function validateCommand(command: string): void {
   for (const pattern of BLOCKED_PATTERNS) {
     if (pattern.test(command)) {
-      
+      throw new Error(
+        `Blocked pattern detected (${pattern}). Use structured tools instead, or ask the user to run this manually.`
+      );
+    }
   }
 }
 
@@ -372,17 +377,24 @@ async function runApprovedCommand(
       'DRY RUN — nothing executed.',
       `Would run: ${command}`,
       `Justification: ${justification}`,
+      `Session usage: ${customCommandCount}/${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION} custom commands used.`,
       'Call with dry_run=false to execute.',
     ].join('\n');
   }
 
+  // Pre-check: reject before executing — limit reached commands never run and never cost quota
+  if (customCommandCount >= CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION) {
     throw new Error(
+      `Custom command session limit (${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION}) reached. ` +
+      `Use structured tools, or ask the user to run this command manually.`
     );
   }
 
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
   const { stdout, stderr } = await exec(cmd, args);
+  // Only increment after successful execution — failed commands do not consume quota
+  customCommandCount++;
   const output = [stdout, stderr].filter(Boolean).join('\n');
   return truncate(output.trim() || '[Command completed with no output]');
 }
