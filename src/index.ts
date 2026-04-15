@@ -29,12 +29,18 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS 
 
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
-  const result = await executeTool(name, args as Record<string, unknown>);
   const isCustom = name === 'run_approved_command';
-  auditLog(name, args as Record<string, unknown>, result.length, isCustom);
-  return {
-    content: [{ type: 'text', text: result }],
-  };
+  try {
+    const result = await executeTool(name, args as Record<string, unknown>);
+    auditLog(name, args as Record<string, unknown>, result.length, isCustom);
+    return {
+      content: [{ type: 'text', text: result }],
+    };
+  } catch (err) {
+    // Audit blocked/failed attempts — no silent failures in audit log
+    auditLog(name, args as Record<string, unknown>, 0, isCustom);
+    throw err;
+  }
 });
 
 // ─── Express App ──────────────────────────────────────────────────────────────

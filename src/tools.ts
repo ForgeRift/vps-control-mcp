@@ -176,12 +176,13 @@ function validateProcess(name: string): void {
 const BLOCKED_PATTERNS: RegExp[] = [
   /\brm/,                  // delete files (rm, rmSync, rmdirSync)
   /\bunlink/,              // unlink, unlinkSync
-  /\bnode\s+-e/,          // node inline code execution bypass
-  /\bpython3?\s+-c/,      // python inline code execution bypass
+  /\bnode\s+(-e\b|--eval\b)/,  // node inline code execution bypass (short and long flag)
+  /\bpython[\d.]*\s+-c\b/,       // python inline code execution bypass (all versions)
   /\bdd\b/,               // disk operations
   /\bmkfs\b/,
   /\bfdisk\b/,
   /\|\s*(sh|bash|zsh|fish)/,  // pipe to shell
+  /\b(bash|sh|zsh|fish|csh|ksh)\s+-c\b/,  // direct shell invocation with -c
   /\bpsql\b/,             // direct DB access
   /\bmysql\b/,
   /\bmongo\b/,
