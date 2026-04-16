@@ -108,6 +108,12 @@ const eventStore = new InMemoryEventStore();
 
 const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
 
+// F-VM-4: Hard cap on concurrent MCP sessions. Prevents a rogue or misbehaving
+// client from exhausting memory by POSTing unbounded initialize requests.
+// 200 is well above realistic demand (one session per Claude desktop / Cowork
+// instance). Configurable via MAX_SESSIONS env.
+const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '200', 10);
+
 function createMcpServer(): Server {
   const server = new Server(
     { name: 'vps-control-mcp', version: '1.1.0' },
@@ -297,21 +303,34 @@ const REFRESH_TOKENS_MAX = 500; // cap against crash-loop seeding unbounded time
 
 const TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
 
-// Allow-listed redirect URI hosts. Cowork/Claude domains + localhost for dev.
-// Self-hosted users can extend via comma-separated env var.
+// Allow-listed redirect URI hosts.
+//
+// F-VM-1 (CRITICAL) fix: loopback hosts are NOT in the default list.
+// Previously, an unauthenticated attacker could GET /authorize?redirect_uri=http://127.0.0.1/cb
+// and receive a real authorization code (their own machine is 127.0.0.1),
+// then exchange it at /token for the root MCP_AUTH_TOKEN.
+//
+// Loopback redirects are now gated behind an explicit opt-in env flag.
+// Production installs should never enable this. For local dev, set
+// ALLOW_LOOPBACK_REDIRECTS=true in .env.
 const DEFAULT_REDIRECT_HOSTS = [
   'claude.ai',
   'www.claude.ai',
   'console.anthropic.com',
   'app.anthropic.com',
-  'localhost',
-  '127.0.0.1',
 ];
 const customHosts = (process.env.ALLOWED_REDIRECT_HOSTS || '')
   .split(',')
   .map(h => h.trim().toLowerCase())
   .filter(Boolean);
-const ALLOWED_REDIRECT_HOSTS = new Set([...DEFAULT_REDIRECT_HOSTS, ...customHosts]);
+const loopbackHosts = (process.env.ALLOW_LOOPBACK_REDIRECTS || '').toLowerCase() === 'true'
+  ? ['localhost', '127.0.0.1']
+  : [];
+const ALLOWED_REDIRECT_HOSTS = new Set([...DEFAULT_REDIRECT_HOSTS, ...customHosts, ...loopbackHosts]);
+
+if (loopbackHosts.length > 0) {
+  console.warn('[vps-control-mcp] ⚠️  ALLOW_LOOPBACK_REDIRECTS=true — localhost/127.0.0.1 accepted as OAuth redirect_uri. Do not use in production.');
+}
 
 function isRedirectAllowed(uri: string): boolean {
   try {
@@ -336,7 +355,8 @@ app.get('/authorize', (req, res) => {
     return;
   }
 
-  const code = Buffer.from(Date.now() + ':' + Math.random()).toString('base64url');
+  // F-VM-6: crypto-random, not Math.random(). 32 bytes = 256 bits of entropy.
+  const code = crypto.randomBytes(32).toString('base64url');
   authCodes.set(code, Date.now());
   setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
 
@@ -362,7 +382,8 @@ app.post('/token', (req, res) => {
     const entry = refreshTokens.get(refresh_token)!;
     refreshTokens.delete(refresh_token);
 
-    const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+    // F-VM-6: crypto-random refresh tokens
+    const newRefresh = crypto.randomBytes(32).toString('base64url');
     if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
       const oldest = refreshTokens.keys().next().value;
       if (oldest) refreshTokens.delete(oldest);
@@ -389,7 +410,8 @@ app.post('/token', (req, res) => {
   authCodes.delete(code);
 
   const accessToken = process.env.MCP_AUTH_TOKEN!;
-  const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+  // F-VM-6: crypto-random refresh token
+  const newRefresh = crypto.randomBytes(32).toString('base64url');
   if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
     const oldest = refreshTokens.keys().next().value;
     if (oldest) refreshTokens.delete(oldest);
@@ -448,6 +470,19 @@ app.all('/mcp', requireAuth, async (req, res) => {
 
   // No session ID (or stale session stripped above) — only allow on POST (initialization)
   if (req.method === 'POST') {
+    // F-VM-4: refuse to allocate beyond MAX_SESSIONS
+    if (sessions.size >= MAX_SESSIONS) {
+      console.warn(`[vps-control-mcp] Session cap reached (${sessions.size}/${MAX_SESSIONS}) — rejecting initialize`);
+      res.status(503)
+        .setHeader('Retry-After', '30')
+        .json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: `Server at session capacity (${MAX_SESSIONS}). Retry in 30s.` },
+          id: null,
+        });
+      return;
+    }
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       eventStore,
@@ -492,7 +527,7 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-const CURRENT_VERSION = '1.2.0';
+const CURRENT_VERSION = '1.3.0';
 
 app.get('/health', async (_req, res) => {
   // Check for updates from GitHub releases (cached 1 hour)
@@ -525,10 +560,17 @@ app.get('/health', async (_req, res) => {
     auth_mode:       supabaseConfigured ? 'supabase' : 'single-token',
     rate_limit:      `${RATE_LIMIT_PER_MIN}/min`,
     security:        {
-      three_tier_model:     'RED (hard-block) + AMBER (warning) + GREEN (allowed)',
-      sensitive_file_guard: true,
-      command_timeout_s:    30,
-      session_cap:          CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION,
+      three_tier_model:       'RED (hard-block) + AMBER (warning) + GREEN (allowed)',
+      sensitive_file_guard:   true,
+      symlink_realpath:       true,  // F-VM-2
+      input_length_caps:      true,  // F-VM-3
+      session_cap:            MAX_SESSIONS,  // F-VM-4
+      bg_command_timeout_min: 10,    // F-VM-5
+      crypto_random_tokens:   true,  // F-VM-6
+      redos_shape_guard:      true,  // F-VM-7
+      command_timeout_s:      30,
+      per_session_custom_cap: CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION,
+      loopback_redirects:     loopbackHosts.length > 0,  // true only if explicitly opted in
     },
   });
 });

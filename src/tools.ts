@@ -59,6 +59,17 @@ const BG_OUTPUT_CAP  = 100 * 1024; // 100 KB per stream — prevents heap fill f
 const __tools_dir = path.dirname(fileURLToPath(import.meta.url));
 const JOBS_FILE   = path.join(__tools_dir, '..', 'deploy-jobs.json');
 
+// Per-job log line cap (F-VM-8). Persisting an unbounded array of command
+// stdout lines grows the JSON file without bound; 500 is plenty to diagnose
+// a deploy failure while keeping the file small.
+const DEPLOY_JOB_LOG_MAX_LINES = 500;
+
+function capLog(log: string[]): string[] {
+  if (log.length <= DEPLOY_JOB_LOG_MAX_LINES) return log;
+  const dropped = log.length - DEPLOY_JOB_LOG_MAX_LINES;
+  return [`[... ${dropped} earlier lines truncated]`, ...log.slice(-DEPLOY_JOB_LOG_MAX_LINES)];
+}
+
 function persistJob(job: DeployJob): void {
   try {
     let store: Record<string, unknown> = {};
@@ -71,7 +82,7 @@ function persistJob(job: DeployJob): void {
       description: job.description,
       startedAt:   job.startedAt.toISOString(),
       status:      job.status,
-      log:         job.log,
+      log:         capLog(job.log),
     };
     // Prune file to last DEPLOY_JOBS_MAX entries (sorted by startedAt) to bound disk growth
     const entries = Object.values(store) as Array<{ id: string; startedAt: string }>;
@@ -161,6 +172,12 @@ function startDeployJob(
 // spawn() streams output in real time; tool returns job_id immediately.
 // Claude polls with get_job_status until status is success|failed.
 
+// Background job hard timeout (F-VM-5). Without this, a hung command
+// (`tail -f`, wedged `apt-get update`, etc.) leaves a zombie PID alive
+// after bgJobs FIFO-evicts the tracking record. 10 minutes is well above
+// any legitimate long-running command we support (deploys are 60-150s).
+const BG_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+
 function startBackgroundJob(command: string): string {
   const id = `job-${Date.now()}`;
   const job: BackgroundJob = {
@@ -184,6 +201,17 @@ function startBackgroundJob(command: string): string {
   const [cmd, ...args] = parts;
   const child = spawn(cmd, args, { detached: false });
 
+  // Hard timeout: SIGTERM first, SIGKILL 5s later if it didn't die.
+  let killed = false;
+  const killTimer: NodeJS.Timeout = setTimeout(() => {
+    killed = true;
+    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }, 5_000);
+    job.stderr += `\n[TIMEOUT: killed after ${BG_COMMAND_TIMEOUT_MS / 60_000} minutes]`;
+  }, BG_COMMAND_TIMEOUT_MS);
+
   child.stdout.on('data', (chunk: Buffer) => {
     if (job.stdout.length < BG_OUTPUT_CAP) {
       job.stdout += chunk.toString();
@@ -201,10 +229,12 @@ function startBackgroundJob(command: string): string {
     }
   });
   child.on('close', (code: number | null) => {
+    clearTimeout(killTimer);
     job.exitCode = code;
-    job.status   = (code === 0) ? 'success' : 'failed';
+    job.status   = killed ? 'failed' : ((code === 0) ? 'success' : 'failed');
   });
   child.on('error', (err: Error) => {
+    clearTimeout(killTimer);
     job.stderr  += '\nProcess error: ' + err.message;
     job.status   = 'failed';
     job.exitCode = -1;
@@ -275,6 +305,33 @@ function parseNum(val: unknown, defaultVal: number): number {
   return isNaN(n) ? defaultVal : n;
 }
 
+// ─── Input length caps (F-VM-3) ───────────────────────────────────────────────
+// Hard caps on user-supplied strings. Enforced at tool entry before any regex
+// runs, so a megabyte-sized input cannot chew through ~100 blocked-pattern
+// iterations. Caps chosen well above realistic legitimate values.
+
+const INPUT_LIMITS = {
+  command:       4_096,
+  justification: 1_000,
+  description:   500,
+  path:          512,
+  pattern:       256,
+  process_name:  64,
+} as const;
+
+function capString(value: string, maxLen: number, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a string`);
+  }
+  if (value.length > maxLen) {
+    throw new Error(
+      `${field} exceeds maximum length of ${maxLen} characters (got ${value.length}). ` +
+      `Truncate the input or split into multiple calls.`
+    );
+  }
+  return value;
+}
+
 // ─── Validators ───────────────────────────────────────────────────────────────
 
 // Sensitive filenames and patterns blocked even inside ALLOWED_READ_DIRS.
@@ -308,20 +365,41 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
 ];
 
 function validatePath(filePath: string): string {
+  capString(filePath, INPUT_LIMITS.path, 'file_path');
+
   const resolved = path.resolve(filePath);
+
+  // Resolve symlinks before ANY policy check (F-VM-2 — symlink-escape fix).
+  // A symlink inside ALLOWED_READ_DIRS pointing at /etc/shadow would otherwise
+  // pass both the allowlist and sensitive-pattern check because those checks
+  // ran against the logical path rather than the real path.
+  let real: string;
+  try {
+    real = fs.realpathSync(resolved);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') {
+      throw new Error(`File not found: "${filePath}".`);
+    }
+    throw err;
+  }
+
   const allowed = ALLOWED_READ_DIRS.some(dir => {
     const d = path.resolve(dir);
-    return resolved === d || resolved.startsWith(d + '/');
+    return real === d || real.startsWith(d + '/');
   });
   if (!allowed) {
     throw new Error(
-      `Path not permitted: "${filePath}". Reads are restricted to: ${ALLOWED_READ_DIRS.join(', ')}`
+      `Path not permitted: "${filePath}" (real path: "${real}"). ` +
+      `Reads are restricted to: ${ALLOWED_READ_DIRS.join(', ')}`
     );
   }
 
-  // Block sensitive files even within allowed directories
+  // Block sensitive files even within allowed directories.
+  // Check against BOTH the requested path and the realpath, so symlinks named
+  // innocuously (innocent.log → /etc/shadow) are still caught by content pattern.
   for (const pattern of SENSITIVE_FILE_PATTERNS) {
-    if (pattern.test(resolved)) {
+    if (pattern.test(resolved) || pattern.test(real)) {
       throw new Error(
         `⛔ BLOCKED: "${path.basename(filePath)}" matches a sensitive file pattern. ` +
         `Reading credential files, keys, tokens, or secrets via MCP is prohibited. ` +
@@ -330,10 +408,11 @@ function validatePath(filePath: string): string {
     }
   }
 
-  return resolved;
+  return real;
 }
 
 function validateProcess(name: string): void {
+  capString(name, INPUT_LIMITS.process_name, 'process_name');
   if (!CONFIG.ALLOWED_PROCESSES.includes(name)) {
     throw new Error(
       `Process not permitted: "${name}". Allowed processes: ${CONFIG.ALLOWED_PROCESSES.join(', ')}`
@@ -529,6 +608,10 @@ const AMBER_PATTERNS: AmberWarning[] = [
 ];
 
 function validateCommand(command: string): void {
+  // Length cap — enforced BEFORE regex iteration so a 1 MB command string
+  // cannot run 100+ blocked patterns against it (F-VM-3).
+  capString(command, INPUT_LIMITS.command, 'command');
+
   // Non-ASCII check — blocks Unicode homoglyph bypasses (e.g. ｒｍ, ｃｕｒｌ)
   if (/[^\x00-\x7F]/.test(command)) {
     throw new Error(
@@ -650,11 +733,31 @@ async function readFileSection(
   return truncate(header + body);
 }
 
+// Known catastrophic ReDoS shapes — reject before shelling out to grep (F-VM-7).
+// These patterns can make a regex engine (or grep) exponential on pathological input.
+const CATASTROPHIC_PATTERN_SHAPES: RegExp[] = [
+  /\(\.\*\)\+/,    // (.*)+  — nested quantifier on any-char group
+  /\(\.\+\)\*/,    // (.+)*  — same class, different nesting
+  /\(\[\^.*\]\*\)\+/, // ([^...]*)+ — negated-class nested quantifier
+  /\.\*\.\*\.\*/,  // .*.*.* — three+ unanchored any-char runs (enough to stall large files)
+];
+
 async function searchFile(
   filePath: string,
   pattern: string,
   contextLines: number
 ): Promise<string> {
+  capString(pattern, INPUT_LIMITS.pattern, 'pattern');
+
+  for (const shape of CATASTROPHIC_PATTERN_SHAPES) {
+    if (shape.test(pattern)) {
+      throw new Error(
+        `⛔ BLOCKED [redos]: pattern contains a known catastrophic shape and was rejected ` +
+        `to protect the server. Rewrite the pattern to be linear-time, or use a simpler literal.`
+      );
+    }
+  }
+
   const safePath = validatePath(filePath);
   const ctx = Math.min(Math.max(0, contextLines), 10);
 
@@ -686,6 +789,7 @@ async function gitLog(count: number): Promise<string> {
 }
 
 async function gitPull(dryRun: boolean, directory?: string): Promise<string> {
+  if (directory) capString(directory, INPUT_LIMITS.path, 'directory');
   const dir = directory?.trim() || CONFIG.APP_DIR;
   if (dryRun) {
     return [
@@ -700,6 +804,7 @@ async function gitPull(dryRun: boolean, directory?: string): Promise<string> {
 }
 
 async function gitPush(dryRun: boolean, description: string): Promise<string> {
+  capString(description ?? '', INPUT_LIMITS.description, 'description');
   if (dryRun) {
     return [
       'DRY RUN — nothing executed.',
@@ -751,7 +856,10 @@ async function runApprovedCommand(
   dryRun: boolean,
   runInBackground: boolean
 ): Promise<string> {
-  // RED tier — hard block (throws on match)
+  // Length caps before any work (F-VM-3)
+  capString(justification ?? '', INPUT_LIMITS.justification, 'justification');
+
+  // RED tier — hard block (throws on match). capString on command runs inside.
   validateCommand(command);
 
   if (!justification || justification.trim().length < 10) {
@@ -818,6 +926,7 @@ async function runApprovedCommand(
 // ─── Deploy Tools ──────────────────────────────────────────────────────────────────
 
 async function deploySharpEdge(dryRun: boolean, description: string): Promise<string> {
+  capString(description ?? '', INPUT_LIMITS.description, 'description');
   if (!description || description.trim().length < 5) {
     throw new Error('description is required (min 5 chars) — describe what is being deployed.');
   }
@@ -862,6 +971,7 @@ async function deploySharpEdge(dryRun: boolean, description: string): Promise<st
 }
 
 async function deployVpsMcp(dryRun: boolean, description: string): Promise<string> {
+  capString(description ?? '', INPUT_LIMITS.description, 'description');
   if (!description || description.trim().length < 5) {
     throw new Error('description is required (min 5 chars) — describe what is being deployed.');
   }
@@ -1219,3 +1329,19 @@ export async function executeTool(
     return `ERROR [${name}]: ${e.message}`;
   }
 }
+
+// ─── Test-only exports ────────────────────────────────────────────────────────
+// Exposed for src/__tests__/security.test.ts. Do NOT consume these from
+// production code — use executeTool() as the stable API surface.
+export const __TEST_ONLY = {
+  validateCommand,
+  validatePath,
+  validateProcess,
+  checkAmberWarnings,
+  capString,
+  INPUT_LIMITS,
+  BLOCKED_PATTERNS,
+  AMBER_PATTERNS,
+  SENSITIVE_FILE_PATTERNS,
+  CATASTROPHIC_PATTERN_SHAPES,
+};
