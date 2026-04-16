@@ -135,8 +135,50 @@ function createMcpServer(): Server {
 // --- Express App -------------------------------------------------------------
 
 const app = express();
+
+// --- CORS (browser-based MCP clients need this) ------------------------------
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version');
+  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  if (_req.method === 'OPTIONS') { res.status(204).end(); return; }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// --- Rate limiting (per-token, sliding window) -------------------------------
+// Prevents runaway Claude loops and leaked-token abuse.
+// Default: 60 requests per minute. Configurable via RATE_LIMIT_PER_MIN env var.
+
+const RATE_LIMIT_PER_MIN = parseInt(process.env.RATE_LIMIT_PER_MIN || '60', 10);
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const rateLimitBuckets = new Map<string, number[]>();
+
+function checkRateLimit(token: string): boolean {
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(token) || [];
+  const filtered = bucket.filter(ts => now - ts < RATE_LIMIT_WINDOW_MS);
+  if (filtered.length >= RATE_LIMIT_PER_MIN) {
+    rateLimitBuckets.set(token, filtered);
+    return false;
+  }
+  filtered.push(now);
+  rateLimitBuckets.set(token, filtered);
+  return true;
+}
+
+// Prune expired entries every 5 minutes to bound memory
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, bucket] of rateLimitBuckets) {
+    const filtered = bucket.filter(ts => now - ts < RATE_LIMIT_WINDOW_MS);
+    if (filtered.length === 0) rateLimitBuckets.delete(token);
+    else rateLimitBuckets.set(token, filtered);
+  }
+}, 5 * 60_000);
 
 // requireAuth is async because validateAuth now does a Supabase lookup in billing mode
 async function requireAuth(
@@ -148,6 +190,18 @@ async function requireAuth(
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
+
+  // Rate limit check (extract token for bucket key)
+  const token = (req.headers.authorization || '').slice(7).trim();
+  if (token && !checkRateLimit(token)) {
+    res.status(429).json({
+      error: 'Rate limit exceeded',
+      message: `Maximum ${RATE_LIMIT_PER_MIN} requests per minute. Please slow down.`,
+      retry_after_seconds: 60,
+    });
+    return;
+  }
+
   next();
 }
 
@@ -403,14 +457,44 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-app.get('/health', (_req, res) => {
+const CURRENT_VERSION = '1.2.0';
+
+app.get('/health', async (_req, res) => {
+  // Check for updates from GitHub releases (cached 1 hour)
+  let latestVersion: string | null = null;
+  try {
+    const cached = (global as Record<string, unknown>).__versionCache as { version: string; checkedAt: number } | undefined;
+    if (cached && Date.now() - cached.checkedAt < 3600_000) {
+      latestVersion = cached.version;
+    } else {
+      const resp = await fetch('https://api.github.com/repos/claudedussy/vps-control-mcp/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github.v3+json' },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { tag_name: string };
+        latestVersion = data.tag_name?.replace(/^v/, '') || null;
+        (global as Record<string, unknown>).__versionCache = { version: latestVersion, checkedAt: Date.now() };
+      }
+    }
+  } catch { /* fail-silent — version check is best-effort */ }
+
   res.json({
-    status:     'ok',
-    uptime_s:   Math.round(process.uptime()),
-    sessions:   sessions.size,
-    version:    '1.1.0',
-    transport:  'streamable-http',
-    auth_mode:  supabaseConfigured ? 'supabase' : 'single-token',
+    status:          'ok',
+    uptime_s:        Math.round(process.uptime()),
+    sessions:        sessions.size,
+    version:         CURRENT_VERSION,
+    latest_version:  latestVersion,
+    update_available: latestVersion ? latestVersion !== CURRENT_VERSION : null,
+    transport:       'streamable-http',
+    auth_mode:       supabaseConfigured ? 'supabase' : 'single-token',
+    rate_limit:      `${RATE_LIMIT_PER_MIN}/min`,
+    security:        {
+      three_tier_model:     'RED (hard-block) + AMBER (warning) + GREEN (allowed)',
+      sensitive_file_guard: true,
+      command_timeout_s:    30,
+      session_cap:          CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION,
+    },
   });
 });
 

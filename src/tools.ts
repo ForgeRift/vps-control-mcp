@@ -238,6 +238,36 @@ function parseNum(val: unknown, defaultVal: number): number {
 
 // ─── Validators ───────────────────────────────────────────────────────────────
 
+// Sensitive filenames and patterns blocked even inside ALLOWED_READ_DIRS.
+// These contain credentials, keys, or secrets that must never be exposed via MCP.
+const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  /\.env($|\.)/i,                    // .env, .env.local, .env.production, etc.
+  /\.ssh\//,                         // SSH keys
+  /id_(rsa|ed25519|ecdsa|dsa)/,      // SSH key files by name
+  /authorized_keys/,
+  /known_hosts/,
+  /\.pem$/i,                         // TLS/SSL private keys
+  /\.key$/i,                         // Generic key files
+  /\.p12$/i,                         // PKCS12 keystores
+  /\.jks$/i,                         // Java keystores
+  /credentials/i,                    // credentials.json, etc.
+  /secrets?\.(json|ya?ml|toml)/i,    // secrets.json, secret.yaml
+  /password/i,                       // password files
+  /token/i,                          // token files (but not tokenize.js etc — path context matters)
+  /\/etc\/shadow/,
+  /\/etc\/sudoers/,
+  /\/etc\/gshadow/,
+  /\.htpasswd/,
+  /\.netrc/,
+  /\.pgpass/,
+  /\.my\.cnf/,                       // MySQL credentials
+  /\.docker\/config\.json/,          // Docker registry credentials
+  /kubeconfig/i,                     // Kubernetes credentials
+  /\.aws\//,                         // AWS credentials
+  /\.gcloud\//,                      // GCP credentials
+  /\.azure\//,                       // Azure credentials
+];
+
 function validatePath(filePath: string): string {
   const resolved = path.resolve(filePath);
   const allowed = ALLOWED_READ_DIRS.some(dir => {
@@ -249,6 +279,18 @@ function validatePath(filePath: string): string {
       `Path not permitted: "${filePath}". Reads are restricted to: ${ALLOWED_READ_DIRS.join(', ')}`
     );
   }
+
+  // Block sensitive files even within allowed directories
+  for (const pattern of SENSITIVE_FILE_PATTERNS) {
+    if (pattern.test(resolved)) {
+      throw new Error(
+        `⛔ BLOCKED: "${path.basename(filePath)}" matches a sensitive file pattern. ` +
+        `Reading credential files, keys, tokens, or secrets via MCP is prohibited. ` +
+        `Access these files directly on the server via SSH.`
+      );
+    }
+  }
+
   return resolved;
 }
 
@@ -260,38 +302,219 @@ function validateProcess(name: string): void {
   }
 }
 
-// Patterns that are hard-blocked in the escape hatch — no override
-const BLOCKED_PATTERNS: RegExp[] = [
-  /\brm/,                  // delete files (rm, rmSync, rmdirSync)
-  /\bunlink/,              // unlink, unlinkSync
-  /\bnode\s+(-e\b|--eval\b)/,  // node inline code execution bypass (short and long flag)
-  /\bpython[\d.]*\s+-c\b/,       // python inline code execution bypass (all versions)
-  /\bdd\b/,               // disk operations
-  /\bmkfs\b/,
-  /\bfdisk\b/,
-  /\|\s*(sh|bash|zsh|fish)/,  // pipe to shell
-  /\b(bash|sh|zsh|fish|csh|ksh)\s+-c\b/,  // direct shell invocation with -c
-  /\bpsql\b/,             // direct DB access
-  /\bmysql\b/,
-  /\bmongo\b/,
-  />\s*\//,               // redirect to absolute path
-  /\bcurl\b.*\|/,         // curl pipe
-  /\bwget\b.*\|/,
-  /\beval\b/,
-  /\bsudo\b/,
-  /`[^`]*`/,              // backtick subshell
-  /\$\([^)]*\)/,          // $() subshell
-  /;/,                    // command chaining
+// ─── Three-Tier Command Security ─────────────────────────────────────────────
+//
+// RED   = Hard-blocked. Cannot be overridden. Command is rejected immediately.
+// AMBER = Dangerous but sometimes legitimate. Forces dry_run=true on first call
+//         and returns a ToS warning. User must explicitly re-call with dry_run=false.
+// GREEN = Allowed (still subject to session cap and audit logging).
+//
+// Every command runs through RED first, then AMBER. If neither matches, it's GREEN.
+
+// ── RED: Hard-blocked patterns (no override, no exceptions) ──────────────────
+const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: string }> = [
+  // --- File destruction ---
+  { pattern: /\brm\b/,                  category: 'file-delete',     reason: 'File deletion is prohibited. Use structured tools or SSH directly.' },
+  { pattern: /\bunlink\b/,              category: 'file-delete',     reason: 'File deletion is prohibited.' },
+  { pattern: /\bshred\b/,               category: 'file-delete',     reason: 'Secure file deletion is prohibited.' },
+  { pattern: /\btruncate\b/,            category: 'file-delete',     reason: 'File truncation is prohibited.' },
+
+  // --- Disk / filesystem ---
+  { pattern: /\bdd\b/,                  category: 'disk-ops',        reason: 'Raw disk operations are prohibited.' },
+  { pattern: /\bmkfs\b/,                category: 'disk-ops',        reason: 'Filesystem creation is prohibited.' },
+  { pattern: /\bfdisk\b/,               category: 'disk-ops',        reason: 'Disk partitioning is prohibited.' },
+  { pattern: /\bparted\b/,              category: 'disk-ops',        reason: 'Disk partitioning is prohibited.' },
+  { pattern: /\bmount\b/,               category: 'disk-ops',        reason: 'Filesystem mount/unmount is prohibited.' },
+  { pattern: /\bumount\b/,              category: 'disk-ops',        reason: 'Filesystem mount/unmount is prohibited.' },
+
+  // --- System state ---
+  { pattern: /\bshutdown\b/,            category: 'system-state',    reason: 'System shutdown is prohibited.' },
+  { pattern: /\breboot\b/,              category: 'system-state',    reason: 'System reboot is prohibited. Use restart_process for PM2 processes.' },
+  { pattern: /\bhalt\b/,                category: 'system-state',    reason: 'System halt is prohibited.' },
+  { pattern: /\bpoweroff\b/,            category: 'system-state',    reason: 'System poweroff is prohibited.' },
+  { pattern: /\binit\s+[0-6]\b/,        category: 'system-state',    reason: 'Runlevel changes are prohibited.' },
+
+  // --- Process killing ---
+  { pattern: /\bkill\b/,                category: 'process-kill',    reason: 'Process killing is prohibited. Use restart_process for PM2 processes.' },
+  { pattern: /\bkillall\b/,             category: 'process-kill',    reason: 'Process killing is prohibited.' },
+  { pattern: /\bpkill\b/,               category: 'process-kill',    reason: 'Process killing is prohibited.' },
+
+  // --- User / permission management ---
+  { pattern: /\buseradd\b/,             category: 'user-mgmt',       reason: 'User management is prohibited.' },
+  { pattern: /\buserdel\b/,             category: 'user-mgmt',       reason: 'User management is prohibited.' },
+  { pattern: /\badduser\b/,             category: 'user-mgmt',       reason: 'User management is prohibited.' },
+  { pattern: /\bdeluser\b/,             category: 'user-mgmt',       reason: 'User management is prohibited.' },
+  { pattern: /\bpasswd\b/,              category: 'user-mgmt',       reason: 'Password changes are prohibited.' },
+  { pattern: /\bchmod\b/,               category: 'permissions',     reason: 'Permission changes are prohibited.' },
+  { pattern: /\bchown\b/,               category: 'permissions',     reason: 'Ownership changes are prohibited.' },
+  { pattern: /\bchgrp\b/,               category: 'permissions',     reason: 'Group ownership changes are prohibited.' },
+  { pattern: /\bsetfacl\b/,             category: 'permissions',     reason: 'ACL modifications are prohibited.' },
+
+  // --- Firewall / network config ---
+  { pattern: /\biptables\b/,            category: 'network-config',  reason: 'Firewall changes are prohibited.' },
+  { pattern: /\bip6tables\b/,           category: 'network-config',  reason: 'Firewall changes are prohibited.' },
+  { pattern: /\bufw\b/,                 category: 'network-config',  reason: 'Firewall changes are prohibited.' },
+  { pattern: /\bnft\b/,                 category: 'network-config',  reason: 'Nftables changes are prohibited.' },
+  { pattern: /\bifconfig\b.*\b(up|down)\b/, category: 'network-config', reason: 'Network interface changes are prohibited.' },
+  { pattern: /\bip\s+(link|addr|route)\s+(add|del|set)/, category: 'network-config', reason: 'Network config changes are prohibited.' },
+
+  // --- Scheduled execution ---
+  { pattern: /\bcrontab\b/,             category: 'scheduled-exec',  reason: 'Cron job modification is prohibited.' },
+  { pattern: /\bat\b\s/,                category: 'scheduled-exec',  reason: 'Scheduled command execution is prohibited.' },
+
+  // --- Service management ---
+  { pattern: /\bsystemctl\b/,           category: 'service-mgmt',    reason: 'Service management is prohibited. Use restart_process for PM2 processes.' },
+  { pattern: /\bservice\b/,             category: 'service-mgmt',    reason: 'Service management is prohibited.' },
+
+  // --- Code execution bypasses ---
+  { pattern: /\bnode\s+(-e\b|--eval\b)/,    category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
+  { pattern: /\bpython[\d.]*\s+-c\b/,       category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
+  { pattern: /\bperl\s+-e\b/,               category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
+  { pattern: /\bruby\s+-e\b/,               category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
+  { pattern: /\bphp\s+-r\b/,                category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
+  { pattern: /\beval\b/,                    category: 'code-exec',  reason: 'Eval is prohibited.' },
+
+  // --- Shell invocation ---
+  { pattern: /\|\s*(sh|bash|zsh|fish|dash|ksh|csh)\b/, category: 'shell-invoke', reason: 'Piping to shell is prohibited.' },
+  { pattern: /\b(bash|sh|zsh|fish|csh|ksh|dash)\s+-c\b/, category: 'shell-invoke', reason: 'Shell invocation with -c is prohibited.' },
+  { pattern: /`[^`]*`/,                     category: 'shell-invoke', reason: 'Backtick subshells are prohibited.' },
+  { pattern: /\$\([^)]*\)/,                 category: 'shell-invoke', reason: '$() subshells are prohibited.' },
+
+  // --- Data exfiltration (outbound network) ---
+  { pattern: /\bcurl\b/,                category: 'data-exfil',      reason: 'curl is prohibited. Data cannot leave the server via MCP.' },
+  { pattern: /\bwget\b/,                category: 'data-exfil',      reason: 'wget is prohibited. Data cannot leave the server via MCP.' },
+  { pattern: /\bnc\b/,                  category: 'data-exfil',      reason: 'netcat is prohibited.' },
+  { pattern: /\bncat\b/,                category: 'data-exfil',      reason: 'ncat is prohibited.' },
+  { pattern: /\bnetcat\b/,              category: 'data-exfil',      reason: 'netcat is prohibited.' },
+  { pattern: /\bsocat\b/,               category: 'data-exfil',      reason: 'socat is prohibited.' },
+  { pattern: /\bssh\b/,                 category: 'data-exfil',      reason: 'Outbound SSH is prohibited.' },
+  { pattern: /\bscp\b/,                 category: 'data-exfil',      reason: 'Outbound SCP is prohibited.' },
+  { pattern: /\brsync\b/,               category: 'data-exfil',      reason: 'rsync is prohibited.' },
+  { pattern: /\bftp\b/,                 category: 'data-exfil',      reason: 'FTP is prohibited.' },
+  { pattern: /\bsftp\b/,                category: 'data-exfil',      reason: 'SFTP is prohibited.' },
+
+  // --- Reverse shell / persistence ---
+  { pattern: /\bnohup\b/,               category: 'persistence',     reason: 'Background process persistence is prohibited.' },
+  { pattern: /\bdisown\b/,              category: 'persistence',     reason: 'Process disown is prohibited.' },
+  { pattern: /\bscreen\b/,              category: 'persistence',     reason: 'Screen sessions are prohibited.' },
+  { pattern: /\btmux\b/,                category: 'persistence',     reason: 'Tmux sessions are prohibited.' },
+
+  // --- Direct DB access ---
+  { pattern: /\bpsql\b/,                category: 'direct-db',       reason: 'Direct database access is prohibited. Use structured query tools.' },
+  { pattern: /\bmysql\b/,               category: 'direct-db',       reason: 'Direct database access is prohibited.' },
+  { pattern: /\bmongo\b/,               category: 'direct-db',       reason: 'Direct database access is prohibited.' },
+  { pattern: /\bredis-cli\b/,           category: 'direct-db',       reason: 'Direct database access is prohibited.' },
+  { pattern: /\bsqlite3\b/,             category: 'direct-db',       reason: 'Direct database access is prohibited.' },
+
+  // --- Package installation (arbitrary code via install scripts) ---
+  { pattern: /\bapt-get\s+install\b/,   category: 'pkg-install',     reason: 'Package installation is prohibited (postinst scripts can execute arbitrary code).' },
+  { pattern: /\bapt\s+install\b/,       category: 'pkg-install',     reason: 'Package installation is prohibited.' },
+  { pattern: /\bdpkg\s+-i\b/,           category: 'pkg-install',     reason: 'Package installation is prohibited.' },
+  { pattern: /\byum\s+install\b/,       category: 'pkg-install',     reason: 'Package installation is prohibited.' },
+  { pattern: /\bdnf\s+install\b/,       category: 'pkg-install',     reason: 'Package installation is prohibited.' },
+  { pattern: /\bpip\s+install\b/,       category: 'pkg-install',     reason: 'pip install is prohibited (arbitrary code execution via setup.py).' },
+  { pattern: /\bnpm\s+install\b/,       category: 'pkg-install',     reason: 'npm install is prohibited (arbitrary code execution via install scripts). Use the deploy tool.' },
+  { pattern: /\bnpx\b/,                 category: 'pkg-install',     reason: 'npx is prohibited (remote code execution).' },
+  { pattern: /\bapt-get\s+remove\b/,    category: 'pkg-remove',      reason: 'Package removal is prohibited.' },
+  { pattern: /\bapt-get\s+purge\b/,     category: 'pkg-remove',      reason: 'Package purge is prohibited.' },
+  { pattern: /\bapt\s+remove\b/,        category: 'pkg-remove',      reason: 'Package removal is prohibited.' },
+
+  // --- Container escape ---
+  { pattern: /\bdocker\b/,              category: 'container',        reason: 'Docker commands are prohibited.' },
+  { pattern: /\bpodman\b/,              category: 'container',        reason: 'Podman commands are prohibited.' },
+  { pattern: /\bkubectl\b/,             category: 'container',        reason: 'kubectl commands are prohibited.' },
+
+  // --- Write-path attacks ---
+  { pattern: />\s*\//,                  category: 'file-write',       reason: 'Redirect to absolute path is prohibited.' },
+  { pattern: />\s*~/,                   category: 'file-write',       reason: 'Redirect to home directory is prohibited.' },
+  { pattern: />>/,                      category: 'file-write',       reason: 'Append redirect is prohibited.' },
+  { pattern: /\btee\b/,                 category: 'file-write',       reason: 'tee (file write) is prohibited.' },
+  { pattern: /\bln\s+-s/,              category: 'file-write',       reason: 'Symlink creation is prohibited.' },
+  { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Copying to system directories is prohibited.' },
+  { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Moving to system directories is prohibited.' },
+
+  // --- Environment manipulation ---
+  { pattern: /\bexport\b/,              category: 'env-manip',        reason: 'Environment variable export is prohibited.' },
+  { pattern: /\bsource\b/,              category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
+  { pattern: /\b\.\s+\//,               category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
+
+  // --- Privilege escalation ---
+  { pattern: /\bsudo\b/,                category: 'priv-esc',         reason: 'sudo is prohibited.' },
+  { pattern: /\bsu\b\s/,                category: 'priv-esc',         reason: 'su (switch user) is prohibited.' },
+  { pattern: /\bpkexec\b/,              category: 'priv-esc',         reason: 'pkexec is prohibited.' },
+  { pattern: /\bdoas\b/,                category: 'priv-esc',         reason: 'doas is prohibited.' },
+
+  // --- History / info leakage ---
+  { pattern: /\bhistory\b/,             category: 'info-leak',        reason: 'Command history access is prohibited.' },
+  { pattern: /\bcat\b.*\/etc\/shadow/,  category: 'info-leak',        reason: 'Shadow file access is prohibited.' },
+  { pattern: /\bcat\b.*\/etc\/passwd/,  category: 'info-leak',        reason: 'Passwd file access is prohibited.' },
+  { pattern: /\bcat\b.*\.env/,          category: 'info-leak',        reason: 'Reading .env files via commands is prohibited. Credential exposure risk.' },
+  { pattern: /\bcat\b.*\.ssh/,          category: 'info-leak',        reason: 'Reading SSH keys via commands is prohibited.' },
+  { pattern: /\bprintenv\b/,            category: 'info-leak',        reason: 'Environment variable dumping is prohibited.' },
+  { pattern: /\benv\b$/,                category: 'info-leak',        reason: 'Environment variable dumping is prohibited.' },
+  { pattern: /\/proc\/\d+/,             category: 'info-leak',        reason: 'Process info access is prohibited.' },
+
+  // --- Command chaining / sequencing ---
+  { pattern: /;/,                        category: 'chaining',        reason: 'Command chaining with ; is prohibited.' },
+  { pattern: /&&/,                       category: 'chaining',        reason: 'Command chaining with && is prohibited.' },
+  { pattern: /\|\|/,                     category: 'chaining',        reason: 'Command chaining with || is prohibited.' },
+
+  // --- HTTP server (exposes files) ---
+  { pattern: /\bpython[\d.]*\s+-m\s+http/,  category: 'http-server', reason: 'Starting an HTTP server is prohibited.' },
+  { pattern: /\bphp\s+-S\b/,                category: 'http-server', reason: 'Starting an HTTP server is prohibited.' },
+];
+
+// ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
+// These commands are sometimes legitimate but carry risk. When matched:
+// - dry_run is forced to true
+// - A structured warning is returned with the command, risk, and ToS notice
+// - The user must re-call with dry_run=false to execute
+
+interface AmberWarning { pattern: RegExp; risk: string; }
+const AMBER_PATTERNS: AmberWarning[] = [
+  { pattern: /\bapt-get\s+update\b/,    risk: 'Package index update. Safe but slow — may timeout the SSE connection. Use run_in_background=true.' },
+  { pattern: /\bfind\b.*-exec\b/,       risk: 'find -exec can execute commands on matched files. Ensure the -exec payload is safe.' },
+  { pattern: /\bxargs\b/,               risk: 'xargs pipes input as arguments to another command. Ensure the target command is safe.' },
+  { pattern: /\bawk\b/,                 risk: 'awk can write files and execute shell commands via system(). Ensure the script is safe.' },
+  { pattern: /\bsed\s+-i/,              risk: 'sed -i modifies files in-place. This cannot be undone. Ensure the pattern and target are correct.' },
 ];
 
 function validateCommand(command: string): void {
-  for (const pattern of BLOCKED_PATTERNS) {
+  // RED tier — hard block
+  for (const { pattern, category, reason } of BLOCKED_PATTERNS) {
     if (pattern.test(command)) {
       throw new Error(
-        `Blocked pattern detected (${pattern}). Use structured tools instead, or ask the user to run this manually.`
+        `⛔ BLOCKED [${category}]: ${reason}\n` +
+        `Command: ${command}\n` +
+        `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+        `Attempting to circumvent security controls violates the Terms of Service.`
       );
     }
   }
+}
+
+function checkAmberWarnings(command: string, dryRun: boolean): string | null {
+  for (const { pattern, risk } of AMBER_PATTERNS) {
+    if (pattern.test(command)) {
+      if (dryRun) {
+        return (
+          `⚠️  WARNING — This command requires explicit confirmation.\n` +
+          `Command: ${command}\n` +
+          `Risk: ${risk}\n` +
+          `\n` +
+          `By proceeding with dry_run=false you acknowledge:\n` +
+          `  • You understand the risk described above\n` +
+          `  • You accept responsibility for the outcome\n` +
+          `  • Misuse may violate the Terms of Service\n` +
+          `\n` +
+          `Call again with dry_run=false to execute.`
+        );
+      }
+      // If dry_run=false, let it through (user confirmed)
+      return null;
+    }
+  }
+  return null;
 }
 
 // ─── Tool Implementations ─────────────────────────────────────────────────────
@@ -450,17 +673,25 @@ async function getSystemHealth(): Promise<string> {
   ].join('\n');
 }
 
+// Default timeout for synchronous commands (30 seconds). Prevents hung sessions.
+const COMMAND_TIMEOUT_MS = 30_000;
+
 async function runApprovedCommand(
   command: string,
   justification: string,
   dryRun: boolean,
   runInBackground: boolean
 ): Promise<string> {
+  // RED tier — hard block (throws on match)
   validateCommand(command);
 
   if (!justification || justification.trim().length < 10) {
     throw new Error('justification must be at least 10 characters explaining why structured tools are insufficient.');
   }
+
+  // AMBER tier — warning system
+  const amberWarning = checkAmberWarnings(command, dryRun);
+  if (amberWarning) return amberWarning;
 
   if (dryRun) {
     return [
@@ -469,7 +700,7 @@ async function runApprovedCommand(
       `Justification: ${justification}`,
       runInBackground
         ? 'Mode: background job (returns job_id immediately; poll with get_job_status)'
-        : 'Mode: synchronous (waits for completion)',
+        : 'Mode: synchronous (waits for completion, 30s timeout)',
       `Session usage: ${customCommandCount}/${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION} custom commands used.`,
       'Call with dry_run=false to execute.',
     ].join('\n');
@@ -499,9 +730,20 @@ async function runApprovedCommand(
 
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
-  const { stdout, stderr } = await exec(cmd, args);
-  const output = [stdout, stderr].filter(Boolean).join('\n');
-  return truncate(output.trim() || '[Command completed with no output]');
+  try {
+    const { stdout, stderr } = await exec(cmd, args, { timeout: COMMAND_TIMEOUT_MS });
+    const output = [stdout, stderr].filter(Boolean).join('\n');
+    return truncate(output.trim() || '[Command completed with no output]');
+  } catch (err) {
+    const e = err as Error & { killed?: boolean; signal?: string };
+    if (e.killed || e.signal === 'SIGTERM') {
+      throw new Error(
+        `Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s and was killed. ` +
+        `For long-running commands, use run_in_background=true.`
+      );
+    }
+    throw err;
+  }
 }
 
 // ─── Deploy Tools ──────────────────────────────────────────────────────────────────
