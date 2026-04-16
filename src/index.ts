@@ -151,6 +151,43 @@ async function requireAuth(
   next();
 }
 
+// --- OAuth 2.0 discovery endpoints (RFC 8414 + RFC 9728) --------------------
+// Cowork (and any spec-compliant MCP client) discovers OAuth endpoints via
+// .well-known metadata before starting the handshake. Without these, the
+// client cannot find /authorize and /token and gives up.
+
+app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+  const baseUrl = process.env.PUBLIC_URL || `http://localhost:${CONFIG.PORT}`;
+  res.json({
+    issuer:                  baseUrl,
+    authorization_endpoint:  `${baseUrl}/authorize`,
+    token_endpoint:          `${baseUrl}/token`,
+    response_types_supported: ['code'],
+    grant_types_supported:   ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['none'],
+    code_challenge_methods_supported: ['S256'],
+  });
+});
+
+app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+  const baseUrl = process.env.PUBLIC_URL || `http://localhost:${CONFIG.PORT}`;
+  res.json({
+    resource:                 `${baseUrl}/mcp`,
+    authorization_servers:    [baseUrl],
+    bearer_methods_supported: ['header'],
+  });
+});
+
+// Path-specific variant — some clients check /.well-known/oauth-protected-resource/{path}
+app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+  const baseUrl = process.env.PUBLIC_URL || `http://localhost:${CONFIG.PORT}`;
+  res.json({
+    resource:                 `${baseUrl}/mcp`,
+    authorization_servers:    [baseUrl],
+    bearer_methods_supported: ['header'],
+  });
+});
+
 // --- OAuth 2.0 endpoints (required by Cowork to initiate connection) ---------
 // Cowork starts an OAuth flow on first connect. We issue long-lived tokens
 // (30 days) and support refresh_token grant so Cowork can silently re-auth
