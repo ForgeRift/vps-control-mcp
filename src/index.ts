@@ -1,10 +1,13 @@
 import express from 'express';
+import crypto from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { EventStore, StreamId, EventId } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import dotenv from 'dotenv';
 import { CONFIG } from './config.js';
 import { validateAuth } from './auth.js';
@@ -27,13 +30,87 @@ if (supabaseConfigured) {
   console.log('[vps-control-mcp] Auth mode: single-token (MCP_AUTH_TOKEN)');
 }
 
-// --- MCP Server Factory ------------------------------------------------------
-// Each SSE connection gets its own Server instance.
-// A single global instance throws "Already connected to a transport" on reconnect.
+// --- In-memory EventStore for resumability ------------------------------------
+// When an SSE stream drops (network blip, nginx timeout), the client reconnects
+// with Last-Event-ID. The EventStore replays missed events so no messages are lost.
+// Events are pruned after 30 minutes to bound memory.
+
+const EVENT_TTL_MS = 30 * 60 * 1000;
+
+interface StoredEvent {
+  streamId: StreamId;
+  message:  JSONRPCMessage;
+  storedAt: number;
+}
+
+class InMemoryEventStore implements EventStore {
+  private events = new Map<EventId, StoredEvent>();
+  private streamEvents = new Map<StreamId, EventId[]>();
+
+  async storeEvent(streamId: StreamId, message: JSONRPCMessage): Promise<EventId> {
+    const eventId = crypto.randomUUID();
+    this.events.set(eventId, { streamId, message, storedAt: Date.now() });
+    const list = this.streamEvents.get(streamId) || [];
+    list.push(eventId);
+    this.streamEvents.set(streamId, list);
+    this.prune();
+    return eventId;
+  }
+
+  async getStreamIdForEventId(eventId: EventId): Promise<StreamId | undefined> {
+    return this.events.get(eventId)?.streamId;
+  }
+
+  async replayEventsAfter(
+    lastEventId: EventId,
+    { send }: { send: (eventId: EventId, message: JSONRPCMessage) => Promise<void> }
+  ): Promise<StreamId> {
+    const origin = this.events.get(lastEventId);
+    if (!origin) throw new Error(`Unknown event ID: ${lastEventId}`);
+
+    const streamId = origin.streamId;
+    const list = this.streamEvents.get(streamId) || [];
+    const idx = list.indexOf(lastEventId);
+    if (idx === -1) throw new Error(`Event ID not in stream: ${lastEventId}`);
+
+    // Replay everything after the last-seen event
+    for (let i = idx + 1; i < list.length; i++) {
+      const ev = this.events.get(list[i]);
+      if (ev) await send(list[i], ev.message);
+    }
+
+    return streamId;
+  }
+
+  private prune(): void {
+    const cutoff = Date.now() - EVENT_TTL_MS;
+    for (const [id, ev] of this.events) {
+      if (ev.storedAt < cutoff) {
+        this.events.delete(id);
+        const list = this.streamEvents.get(ev.streamId);
+        if (list) {
+          const filtered = list.filter(e => e !== id);
+          if (filtered.length) this.streamEvents.set(ev.streamId, filtered);
+          else this.streamEvents.delete(ev.streamId);
+        }
+      }
+    }
+  }
+}
+
+const eventStore = new InMemoryEventStore();
+
+// --- MCP Server + Transport management ----------------------------------------
+// Each session gets its own Server + Transport pair.
+// StreamableHTTP handles reconnection natively — the client POSTs each message
+// independently and can GET to open SSE streams. If a stream drops, the client
+// reconnects with Last-Event-ID and missed events are replayed.
+
+const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
 
 function createMcpServer(): Server {
   const server = new Server(
-    { name: 'vps-control-mcp', version: '1.0.0' },
+    { name: 'vps-control-mcp', version: '1.1.0' },
     { capabilities: { tools: {} } }
   );
 
@@ -154,8 +231,8 @@ app.post('/token', (req, res) => {
 
     const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
     refreshTokens.set(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now() });
-    // Expire refresh tokens after 90 days
-    setTimeout(() => refreshTokens.delete(newRefresh), 90 * 24 * 3600 * 1000);
+    // setTimeout max is ~24.8 days (2^31-1 ms). Use 24 days; tokens also checked at use time.
+    setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
 
     res.json({
       access_token:  entry.accessToken,
@@ -177,12 +254,8 @@ app.post('/token', (req, res) => {
   const accessToken = process.env.MCP_AUTH_TOKEN!;
   const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
   refreshTokens.set(newRefresh, { accessToken, issuedAt: Date.now() });
-  // Expire refresh tokens after 90 days
-  setTimeout(() => refreshTokens.delete(newRefresh), 90 * 24 * 3600 * 1000);
+  setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
 
-  // Return the customer's MCP_AUTH_TOKEN as the access token.
-  // In billing mode this IS the customer's unique license key,
-  // which is then validated against Supabase on every request.
   res.json({
     access_token:  accessToken,
     token_type:    'bearer',
@@ -191,26 +264,63 @@ app.post('/token', (req, res) => {
   });
 });
 
-// --- MCP transport endpoints -------------------------------------------------
+// --- Streamable HTTP MCP endpoint --------------------------------------------
+// Single /mcp endpoint handles GET (SSE stream), POST (messages), DELETE (session teardown).
+// Replaces the old /sse + /message pair. Supports auto-reconnection and resumability.
 
-const transports = new Map<string, SSEServerTransport>();
+app.all('/mcp', requireAuth, async (req, res) => {
+  // Extract session ID from request header
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-app.get('/sse', requireAuth, async (req, res) => {
-  const transport = new SSEServerTransport('/message', res);
-  transports.set(transport.sessionId, transport);
-  res.on('close', () => transports.delete(transport.sessionId));
-  const server = createMcpServer();
-  await server.connect(transport);
-});
-
-app.post('/message', requireAuth, async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-  const transport = transports.get(sessionId);
-  if (!transport) {
-    res.status(404).json({ error: 'Session not found. Re-connect via /sse.' });
+  // For existing sessions, route to the stored transport
+  if (sessionId && sessions.has(sessionId)) {
+    const { transport } = sessions.get(sessionId)!;
+    await transport.handleRequest(req, res, req.body);
     return;
   }
-  await transport.handlePostMessage(req, res, req.body);
+
+  // For new sessions (initialization POST or no session yet)
+  if (req.method === 'POST') {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      eventStore,
+      onsessioninitialized: (id) => {
+        console.log(`[vps-control-mcp] Session initialized: ${id}`);
+        sessions.set(id, { server, transport });
+      },
+      onsessionclosed: (id) => {
+        console.log(`[vps-control-mcp] Session closed: ${id}`);
+        sessions.delete(id);
+      },
+    });
+
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        sessions.delete(transport.sessionId);
+      }
+    };
+
+    const server = createMcpServer();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    return;
+  }
+
+  // GET or DELETE without valid session → 400
+  res.status(400).json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'No valid session. Send an initialize POST first.' },
+    id: null,
+  });
+});
+
+// --- Backwards-compatible /sse endpoint (redirect to /mcp) -------------------
+// Old clients or cached Cowork configs pointing to /sse get a helpful redirect.
+app.get('/sse', (_req, res) => {
+  res.status(410).json({
+    error: 'SSE transport removed. Use /mcp endpoint (Streamable HTTP).',
+    mcp_endpoint: '/mcp',
+  });
 });
 
 // --- Health check ------------------------------------------------------------
@@ -219,8 +329,9 @@ app.get('/health', (_req, res) => {
   res.json({
     status:     'ok',
     uptime_s:   Math.round(process.uptime()),
-    sessions:   transports.size,
-    version:    '1.0.0',
+    sessions:   sessions.size,
+    version:    '1.1.0',
+    transport:  'streamable-http',
     auth_mode:  supabaseConfigured ? 'supabase' : 'single-token',
   });
 });
@@ -229,6 +340,7 @@ app.get('/health', (_req, res) => {
 
 app.listen(CONFIG.PORT, () => {
   console.log('[vps-control-mcp] Running on port ' + CONFIG.PORT);
+  console.log('[vps-control-mcp] Transport: Streamable HTTP (/mcp)');
   console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
   console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
 });

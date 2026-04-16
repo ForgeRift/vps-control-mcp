@@ -49,7 +49,7 @@ fi
 
 # Convert IP dots to dashes for sslip.io domain (e.g. 104.131.74.82 → 104-131-74-82.sslip.io)
 SSLIP_DOMAIN="${PUBLIC_IP//./-}.sslip.io"
-MCP_URL="https://${SSLIP_DOMAIN}/sse"
+MCP_URL="https://${SSLIP_DOMAIN}/mcp"
 
 echo "✓ Public IP:   $PUBLIC_IP"
 echo "✓ TLS domain:  $SSLIP_DOMAIN"
