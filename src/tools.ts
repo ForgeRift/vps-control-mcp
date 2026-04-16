@@ -554,7 +554,7 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // --- Environment manipulation ---
   { pattern: /\bexport\b/,              category: 'env-manip',        reason: 'Environment variable export is prohibited.' },
   { pattern: /\bsource\b/,              category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
-  { pattern: /\b\.\s+\//,               category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
+  { pattern: /(?:^|[;&|])\s*\.\s+\//,   category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
 
   // --- Privilege escalation ---
   { pattern: /\bsudo\b/,                category: 'priv-esc',         reason: 'sudo is prohibited.' },
