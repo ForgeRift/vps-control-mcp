@@ -75,12 +75,42 @@ async function requireAuth(
 }
 
 // --- OAuth 2.0 endpoints (required by Cowork to initiate connection) ---------
-// Cowork always starts an OAuth flow regardless of stored bearer token.
-// This is a private single-user server — /authorize auto-issues a code and
-// redirects immediately. No form needed; the actual MCP calls still require
-// the bearer token so there is no meaningful security regression.
+// Cowork starts an OAuth flow on first connect. We issue long-lived tokens
+// (30 days) and support refresh_token grant so Cowork can silently re-auth
+// without opening a browser window every session.
+//
+// redirect_uri is validated against an allow-list of known Cowork/Claude
+// domains. Self-hosted users can add custom origins via ALLOWED_REDIRECT_HOSTS.
 
 const authCodes = new Map<string, number>();
+const refreshTokens = new Map<string, { accessToken: string; issuedAt: number }>();
+
+const TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
+
+// Allow-listed redirect URI hosts. Cowork/Claude domains + localhost for dev.
+// Self-hosted users can extend via comma-separated env var.
+const DEFAULT_REDIRECT_HOSTS = [
+  'claude.ai',
+  'www.claude.ai',
+  'console.anthropic.com',
+  'app.anthropic.com',
+  'localhost',
+  '127.0.0.1',
+];
+const customHosts = (process.env.ALLOWED_REDIRECT_HOSTS || '')
+  .split(',')
+  .map(h => h.trim().toLowerCase())
+  .filter(Boolean);
+const ALLOWED_REDIRECT_HOSTS = new Set([...DEFAULT_REDIRECT_HOSTS, ...customHosts]);
+
+function isRedirectAllowed(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    return ALLOWED_REDIRECT_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 // Step 1: Cowork opens this in a browser — auto-redirect with code
 app.get('/authorize', (req, res) => {
@@ -88,6 +118,11 @@ app.get('/authorize', (req, res) => {
 
   if (!redirect_uri) {
     res.status(400).send('Missing redirect_uri');
+    return;
+  }
+
+  if (!isRedirectAllowed(redirect_uri)) {
+    res.status(403).send('redirect_uri host not in allow-list. Set ALLOWED_REDIRECT_HOSTS to add custom origins.');
     return;
   }
 
@@ -102,10 +137,36 @@ app.get('/authorize', (req, res) => {
   res.redirect(url.toString());
 });
 
-// Step 2: Cowork exchanges code for access token
+// Step 2: Cowork exchanges code (or refresh_token) for access token
 app.post('/token', (req, res) => {
-  const { code } = req.body as Record<string, string>;
+  const { grant_type, code, refresh_token } = req.body as Record<string, string>;
 
+  // --- Refresh token grant ---
+  if (grant_type === 'refresh_token') {
+    if (!refresh_token || !refreshTokens.has(refresh_token)) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'Unknown or expired refresh_token.' });
+      return;
+    }
+
+    // Rotate: invalidate old refresh token, issue new pair
+    const entry = refreshTokens.get(refresh_token)!;
+    refreshTokens.delete(refresh_token);
+
+    const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+    refreshTokens.set(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now() });
+    // Expire refresh tokens after 90 days
+    setTimeout(() => refreshTokens.delete(newRefresh), 90 * 24 * 3600 * 1000);
+
+    res.json({
+      access_token:  entry.accessToken,
+      token_type:    'bearer',
+      expires_in:    TOKEN_TTL_SECONDS,
+      refresh_token: newRefresh,
+    });
+    return;
+  }
+
+  // --- Authorization code grant (default) ---
   if (!code || !authCodes.has(code)) {
     res.status(400).json({ error: 'invalid_grant' });
     return;
@@ -113,13 +174,20 @@ app.post('/token', (req, res) => {
 
   authCodes.delete(code);
 
+  const accessToken = process.env.MCP_AUTH_TOKEN!;
+  const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+  refreshTokens.set(newRefresh, { accessToken, issuedAt: Date.now() });
+  // Expire refresh tokens after 90 days
+  setTimeout(() => refreshTokens.delete(newRefresh), 90 * 24 * 3600 * 1000);
+
   // Return the customer's MCP_AUTH_TOKEN as the access token.
   // In billing mode this IS the customer's unique license key,
   // which is then validated against Supabase on every request.
   res.json({
-    access_token: process.env.MCP_AUTH_TOKEN,
-    token_type:   'bearer',
-    expires_in:   3600,
+    access_token:  accessToken,
+    token_type:    'bearer',
+    expires_in:    TOKEN_TTL_SECONDS,
+    refresh_token: newRefresh,
   });
 });
 

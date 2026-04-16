@@ -123,6 +123,7 @@ PORT=$MCP_PORT
 # MAX_OUTPUT_CHARS=3000
 # MAX_FILE_LINES=100
 # ALLOWED_READ_DIRS=/root/myapp,/root/.pm2/logs
+# ALLOWED_REDIRECT_HOSTS=my-custom-domain.com
 ENVEOF
 
   echo "✓ Auth token generated and saved to .env"
@@ -255,10 +256,8 @@ echo "         URL:   $MCP_URL"
 echo "         Token: $TOKEN"
 echo "    3. Click Connect. A browser window opens and closes"
 echo "       automatically (OAuth handshake). This takes 2–5 seconds."
-echo "    4. Done. Tools are available for the full session."
-echo ""
-echo "  Note: You must click Connect once per Cowork session."
-echo "  This is expected behaviour — not a bug."
+echo "    4. Done. Your token lasts 30 days and refreshes automatically."
+echo "       No need to reconnect every session."
 echo ""
 echo "  Option B — claude_desktop_config.json (Claude Desktop app):"
 echo "    Add this to your config file:"
