@@ -452,7 +452,17 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bcat\b.*\.ssh/,          category: 'info-leak',        reason: 'Reading SSH keys via commands is prohibited.' },
   { pattern: /\bprintenv\b/,            category: 'info-leak',        reason: 'Environment variable dumping is prohibited.' },
   { pattern: /\benv\b$/,                category: 'info-leak',        reason: 'Environment variable dumping is prohibited.' },
-  { pattern: /\/proc\/\d+/,             category: 'info-leak',        reason: 'Process info access is prohibited.' },
+  { pattern: /\/proc\//,                category: 'info-leak',        reason: '/proc filesystem access is prohibited. /proc/self/environ exposes all env vars including secrets.' },
+
+  // Read utilities — blocked to prevent sensitive file exfiltration via non-cat paths
+  { pattern: /\bhead\b.*\.env/,         category: 'info-leak',        reason: 'Reading .env files is prohibited.' },
+  { pattern: /\btail\b.*\.env/,         category: 'info-leak',        reason: 'Reading .env files is prohibited.' },
+  { pattern: /\bhead\b.*\/etc\//,       category: 'info-leak',        reason: 'Reading /etc system files is prohibited.' },
+  { pattern: /\btail\b.*\/etc\//,       category: 'info-leak',        reason: 'Reading /etc system files is prohibited.' },
+  { pattern: /\bstrings\b/,             category: 'info-leak',        reason: 'strings command is prohibited (binary secret extraction).' },
+  { pattern: /\bhexdump\b/,             category: 'info-leak',        reason: 'hexdump is prohibited (binary secret extraction).' },
+  { pattern: /\bxxd\b/,                 category: 'info-leak',        reason: 'xxd is prohibited (binary secret extraction).' },
+  { pattern: /\bod\b\s/,                category: 'info-leak',        reason: 'od (octal dump) is prohibited (binary secret extraction).' },
 
   // --- Command chaining / sequencing ---
   { pattern: /;/,                        category: 'chaining',        reason: 'Command chaining with ; is prohibited.' },
@@ -480,6 +490,26 @@ const AMBER_PATTERNS: AmberWarning[] = [
 ];
 
 function validateCommand(command: string): void {
+  // Non-ASCII check — blocks Unicode homoglyph bypasses (e.g. ｒｍ, ｃｕｒｌ)
+  if (/[^\x00-\x7F]/.test(command)) {
+    throw new Error(
+      `⛔ BLOCKED [unicode]: Non-ASCII characters are not permitted in commands.\n` +
+      `Command: ${command}\n` +
+      `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
+
+  // Newline / carriage-return check — blocks newline injection bypasses
+  if (/[\r\n]/.test(command)) {
+    throw new Error(
+      `⛔ BLOCKED [newline-inject]: Newline or carriage-return characters are not permitted in commands.\n` +
+      `Command: ${JSON.stringify(command)}\n` +
+      `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
+
   // RED tier — hard block
   for (const { pattern, category, reason } of BLOCKED_PATTERNS) {
     if (pattern.test(command)) {
