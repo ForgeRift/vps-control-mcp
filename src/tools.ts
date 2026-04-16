@@ -22,6 +22,7 @@ function runCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: st
 let customCommandCount = 0;
 
 // ─── Async Deploy Job Store ───────────────────────────────────────────────────
+// Bounded to 50 entries (FIFO eviction) to prevent unbounded heap growth.
 interface DeployJob {
   id:          string;
   type:        'sharpedge' | 'vps-mcp';
@@ -31,10 +32,13 @@ interface DeployJob {
   log:         string[];
 }
 const deployJobs = new Map<string, DeployJob>();
+const DEPLOY_JOBS_MAX = 50;
 
 // ─── Background Command Job Store ─────────────────────────────────────────────
 // Stores results of long-running run_approved_command calls (run_in_background=true).
 // Fixes SSE connection drops on commands >60s (apt-get, npm install, etc.).
+// Bounded to 100 entries (FIFO eviction). stdout/stderr capped at 100 KB each
+// to prevent large command output from filling the V8 heap.
 interface BackgroundJob {
   id:        string;
   command:   string;
@@ -45,6 +49,8 @@ interface BackgroundJob {
   exitCode:  number | null;
 }
 const bgJobs = new Map<string, BackgroundJob>();
+const BG_JOBS_MAX    = 100;
+const BG_OUTPUT_CAP  = 100 * 1024; // 100 KB per stream — prevents heap fill from large output
 
 // ─── File-based job persistence (VC-8) ───────────────────────────────────────
 // deploy_vps_mcp restarts this process mid-deploy, wiping the in-memory Map.
@@ -67,6 +73,14 @@ function persistJob(job: DeployJob): void {
       status:      job.status,
       log:         job.log,
     };
+    // Prune file to last DEPLOY_JOBS_MAX entries (sorted by startedAt) to bound disk growth
+    const entries = Object.values(store) as Array<{ id: string; startedAt: string }>;
+    if (entries.length > DEPLOY_JOBS_MAX) {
+      entries.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+      const pruned: Record<string, unknown> = {};
+      for (const e of entries.slice(-DEPLOY_JOBS_MAX)) pruned[e.id] = store[e.id];
+      store = pruned;
+    }
     fs.writeFileSync(JOBS_FILE, JSON.stringify(store, null, 2), 'utf8');
   } catch { /* fail-silent -- persistence is best-effort */ }
 }
@@ -104,6 +118,11 @@ function startDeployJob(
     log:       [`=== ${label} deploy started ===`, `Description: ${description}`, ''],
   };
 
+  // FIFO eviction: keep Map bounded at DEPLOY_JOBS_MAX entries
+  if (deployJobs.size >= DEPLOY_JOBS_MAX) {
+    const oldest = deployJobs.keys().next().value;
+    if (oldest) deployJobs.delete(oldest);
+  }
   deployJobs.set(id, job);
   persistJob(job);
 
@@ -153,14 +172,34 @@ function startBackgroundJob(command: string): string {
     stderr:    '',
     exitCode:  null,
   };
+
+  // FIFO eviction: keep Map bounded at BG_JOBS_MAX entries
+  if (bgJobs.size >= BG_JOBS_MAX) {
+    const oldest = bgJobs.keys().next().value;
+    if (oldest) bgJobs.delete(oldest);
+  }
   bgJobs.set(id, job);
 
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
   const child = spawn(cmd, args, { detached: false });
 
-  child.stdout.on('data', (chunk: Buffer) => { job.stdout += chunk.toString(); });
-  child.stderr.on('data', (chunk: Buffer) => { job.stderr += chunk.toString(); });
+  child.stdout.on('data', (chunk: Buffer) => {
+    if (job.stdout.length < BG_OUTPUT_CAP) {
+      job.stdout += chunk.toString();
+      if (job.stdout.length > BG_OUTPUT_CAP) {
+        job.stdout = job.stdout.slice(0, BG_OUTPUT_CAP) + '\n[OUTPUT CAPPED at 100KB]';
+      }
+    }
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    if (job.stderr.length < BG_OUTPUT_CAP) {
+      job.stderr += chunk.toString();
+      if (job.stderr.length > BG_OUTPUT_CAP) {
+        job.stderr = job.stderr.slice(0, BG_OUTPUT_CAP) + '\n[OUTPUT CAPPED at 100KB]';
+      }
+    }
+  });
   child.on('close', (code: number | null) => {
     job.exitCode = code;
     job.status   = (code === 0) ? 'success' : 'failed';

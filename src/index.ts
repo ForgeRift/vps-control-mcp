@@ -293,6 +293,7 @@ app.post('/register', (req, res) => {
 
 const authCodes = new Map<string, number>();
 const refreshTokens = new Map<string, { accessToken: string; issuedAt: number }>();
+const REFRESH_TOKENS_MAX = 500; // cap against crash-loop seeding unbounded timers
 
 const TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
 
@@ -362,6 +363,10 @@ app.post('/token', (req, res) => {
     refreshTokens.delete(refresh_token);
 
     const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+    if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
+      const oldest = refreshTokens.keys().next().value;
+      if (oldest) refreshTokens.delete(oldest);
+    }
     refreshTokens.set(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now() });
     // setTimeout max is ~24.8 days (2^31-1 ms). Use 24 days; tokens also checked at use time.
     setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
@@ -385,6 +390,10 @@ app.post('/token', (req, res) => {
 
   const accessToken = process.env.MCP_AUTH_TOKEN!;
   const newRefresh = Buffer.from(Date.now() + ':refresh:' + Math.random()).toString('base64url');
+  if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
+    const oldest = refreshTokens.keys().next().value;
+    if (oldest) refreshTokens.delete(oldest);
+  }
   refreshTokens.set(newRefresh, { accessToken, issuedAt: Date.now() });
   setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
 
@@ -411,7 +420,20 @@ app.all('/mcp', requireAuth, async (req, res) => {
     return;
   }
 
-  // For new sessions (initialization POST or no session yet)
+  // Stale/unknown session ID — reject immediately.
+  // Do NOT create a new Server+Transport here: abandoned pairs leak memory,
+  // fill the V8 heap, and trigger crash loops when the client retries.
+  // The client must drop the session ID and re-initialize from scratch.
+  if (sessionId) {
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session not found. Drop Mcp-Session-Id and send a fresh initialize request.' },
+      id: null,
+    });
+    return;
+  }
+
+  // No session ID — only allow on POST (initialization)
   if (req.method === 'POST') {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
