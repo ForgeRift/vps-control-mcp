@@ -420,20 +420,33 @@ app.all('/mcp', requireAuth, async (req, res) => {
     return;
   }
 
-  // Stale/unknown session ID — reject immediately.
-  // Do NOT create a new Server+Transport here: abandoned pairs leak memory,
-  // fill the V8 heap, and trigger crash loops when the client retries.
-  // The client must drop the session ID and re-initialize from scratch.
+  // Stale/unknown session ID handling:
+  // - If this is an initialize request (client reconnecting after server restart):
+  //   strip the stale ID and fall through to fresh session creation. The client
+  //   receives a new session ID in the response header and continues seamlessly.
+  //   This eliminates manual plugin reconnect for end users after deploys/restarts.
+  // - If this is a non-initialize request with a stale ID: return 404 per MCP spec.
+  //   Do NOT create a new Server+Transport — abandoned pairs leak memory.
   if (sessionId) {
-    res.status(400).json({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Session not found. Drop Mcp-Session-Id and send a fresh initialize request.' },
-      id: null,
-    });
-    return;
+    const body = req.body as Record<string, unknown>;
+    const isInitialize = typeof body?.method === 'string' && body.method === 'initialize';
+
+    if (isInitialize) {
+      // Strip stale session ID so the SDK treats this as a fresh connection
+      delete req.headers['mcp-session-id'];
+      console.log(`[vps-control-mcp] Stale session ${sessionId} — re-initializing transparently`);
+      // Fall through to fresh session creation below
+    } else {
+      res.status(404).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Session not found. Client should re-initialize.' },
+        id: null,
+      });
+      return;
+    }
   }
 
-  // No session ID — only allow on POST (initialization)
+  // No session ID (or stale session stripped above) — only allow on POST (initialization)
   if (req.method === 'POST') {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
