@@ -162,6 +162,7 @@ app.get('/.well-known/oauth-authorization-server', (_req, res) => {
     issuer:                  baseUrl,
     authorization_endpoint:  `${baseUrl}/authorize`,
     token_endpoint:          `${baseUrl}/token`,
+    registration_endpoint:   `${baseUrl}/register`,
     response_types_supported: ['code'],
     grant_types_supported:   ['authorization_code', 'refresh_token'],
     token_endpoint_auth_methods_supported: ['none'],
@@ -185,6 +186,46 @@ app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
     resource:                 `${baseUrl}/mcp`,
     authorization_servers:    [baseUrl],
     bearer_methods_supported: ['header'],
+  });
+});
+
+// --- RFC 7591 Dynamic Client Registration -----------------------------------
+// Cowork registers itself as an OAuth client before starting the auth flow.
+// We accept any registration and return a client_id. The real security gate
+// is the bearer token validated on every MCP request, not the OAuth client_id.
+
+interface RegisteredClient {
+  client_id:     string;
+  client_name?:  string;
+  redirect_uris: string[];
+  created_at:    number;
+}
+const registeredClients = new Map<string, RegisteredClient>();
+
+app.post('/register', (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const clientId = crypto.randomUUID();
+  const client: RegisteredClient = {
+    client_id:     clientId,
+    client_name:   (body.client_name as string) || 'unknown',
+    redirect_uris: (body.redirect_uris as string[]) || [],
+    created_at:    Date.now(),
+  };
+  registeredClients.set(clientId, client);
+
+  // Prune old registrations (keep last 100)
+  if (registeredClients.size > 100) {
+    const oldest = registeredClients.keys().next().value;
+    if (oldest) registeredClients.delete(oldest);
+  }
+
+  res.status(201).json({
+    client_id:                   clientId,
+    client_name:                 client.client_name,
+    redirect_uris:               client.redirect_uris,
+    grant_types:                 ['authorization_code', 'refresh_token'],
+    response_types:              ['code'],
+    token_endpoint_auth_method:  'none',
   });
 });
 
