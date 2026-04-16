@@ -13,9 +13,18 @@ import { TOOLS, executeTool } from './tools.js';
 
 dotenv.config();
 
-if (!process.env.MCP_AUTH_TOKEN) {
-  console.error('FATAL: MCP_AUTH_TOKEN is not set. Refusing to start without auth.');
+// Auth token is required in single-token mode; optional if Supabase is configured.
+const supabaseConfigured = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+
+if (!process.env.MCP_AUTH_TOKEN && !supabaseConfigured) {
+  console.error('FATAL: Set MCP_AUTH_TOKEN or configure SUPABASE_URL + SUPABASE_SERVICE_KEY.');
   process.exit(1);
+}
+
+if (supabaseConfigured) {
+  console.log('[vps-control-mcp] Auth mode: Supabase multi-token (billing-integrated)');
+} else {
+  console.log('[vps-control-mcp] Auth mode: single-token (MCP_AUTH_TOKEN)');
 }
 
 // --- MCP Server Factory ------------------------------------------------------
@@ -52,12 +61,13 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-function requireAuth(
+// requireAuth is async because validateAuth now does a Supabase lookup in billing mode
+async function requireAuth(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction
-): void {
-  if (!validateAuth(req)) {
+): Promise<void> {
+  if (!(await validateAuth(req))) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -92,7 +102,7 @@ app.get('/authorize', (req, res) => {
   res.redirect(url.toString());
 });
 
-// Step 3: Cowork exchanges code for access token
+// Step 2: Cowork exchanges code for access token
 app.post('/token', (req, res) => {
   const { code } = req.body as Record<string, string>;
 
@@ -103,6 +113,9 @@ app.post('/token', (req, res) => {
 
   authCodes.delete(code);
 
+  // Return the customer's MCP_AUTH_TOKEN as the access token.
+  // In billing mode this IS the customer's unique license key,
+  // which is then validated against Supabase on every request.
   res.json({
     access_token: process.env.MCP_AUTH_TOKEN,
     token_type:   'bearer',
@@ -135,14 +148,19 @@ app.post('/message', requireAuth, async (req, res) => {
 // --- Health check ------------------------------------------------------------
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', uptime_s: Math.round(process.uptime()), sessions: transports.size, version: '1.0.0' });
+  res.json({
+    status:     'ok',
+    uptime_s:   Math.round(process.uptime()),
+    sessions:   transports.size,
+    version:    '1.0.0',
+    auth_mode:  supabaseConfigured ? 'supabase' : 'single-token',
+  });
 });
 
 // --- Start -------------------------------------------------------------------
 
 app.listen(CONFIG.PORT, () => {
   console.log('[vps-control-mcp] Running on port ' + CONFIG.PORT);
-  console.log('[vps-control-mcp] App dir: ' + CONFIG.APP_DIR);
-  console.log('[vps-control-mcp] Audit log: ' + CONFIG.AUDIT_LOG_PATH);
-  console.log('[vps-control-mcp] Auth token: SET');
+  console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
+  console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
 });
