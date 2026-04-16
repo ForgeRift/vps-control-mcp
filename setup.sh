@@ -99,10 +99,21 @@ echo "✓ Build complete"
 
 if [ -f "$ENV_FILE" ]; then
   echo ""
-  echo "Existing .env found — keeping current configuration."
+  echo "Existing .env found — preserving your configuration."
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   TOKEN="${MCP_AUTH_TOKEN:-}"
+
+  # Ensure PUBLIC_URL is set (added in v1.2.0 — may be missing in older .env files)
+  if ! grep -q "^PUBLIC_URL=" "$ENV_FILE" 2>/dev/null; then
+    echo "PUBLIC_URL=https://${SSLIP_DOMAIN}" >> "$ENV_FILE"
+    echo "✓ Added PUBLIC_URL to existing .env"
+  fi
+
+  # Ensure RATE_LIMIT_PER_MIN is set (added in v1.2.0)
+  if ! grep -q "^RATE_LIMIT_PER_MIN=" "$ENV_FILE" 2>/dev/null; then
+    echo "# RATE_LIMIT_PER_MIN=60" >> "$ENV_FILE"
+  fi
 else
   echo ""
   echo "Generating auth token..."
@@ -111,6 +122,9 @@ else
   cat > "$ENV_FILE" <<ENVEOF
 # ── Required ──────────────────────────────────────────────────────────────────
 MCP_AUTH_TOKEN=$TOKEN
+
+# ── Auto-detected (used by OAuth discovery endpoints) ─────────────────────────
+PUBLIC_URL=https://${SSLIP_DOMAIN}
 
 # ── Optional (defaults shown) ─────────────────────────────────────────────────
 PORT=$MCP_PORT
@@ -124,6 +138,8 @@ PORT=$MCP_PORT
 # MAX_FILE_LINES=100
 # ALLOWED_READ_DIRS=/root/myapp,/root/.pm2/logs
 # ALLOWED_REDIRECT_HOSTS=my-custom-domain.com
+# RATE_LIMIT_PER_MIN=60
+# AUDIT_MAX_SIZE_MB=10
 ENVEOF
 
   echo "✓ Auth token generated and saved to .env"
