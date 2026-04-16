@@ -1,1 +1,24 @@
-{"name": "vps-control", "version": "1.0.0", "description": "Connect Claude to your remote Linux server via MCP - run commands, inspect PM2 logs, deploy code, restart processes, and manage your VPS directly from Cowork.", "author": {"name": "Dustin Denis", "email": "claudedussy@gmail.com"}, "repository": "https://github.com/claudedussy/vps-control-mcp", "keywords": ["vps", "ssh", "digitalocean", "linux", "pm2", "deploy", "server", "remote", "node"]}
+{
+  "name": "vps-control",
+  "version": "1.2.0",
+  "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 100+ hard-blocked patterns, sensitive file protection, OAuth 2.0 authentication, rate limiting, and full audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
+  "author": {
+    "name": "SharpEdge",
+    "email": "support@sharpedge.io"
+  },
+  "repository": "https://github.com/claudedussy/vps-control-mcp",
+  "keywords": [
+    "vps",
+    "ssh",
+    "digitalocean",
+    "linux",
+    "pm2",
+    "deploy",
+    "server",
+    "remote",
+    "node",
+    "security",
+    "oauth",
+    "audit"
+  ]
+}
