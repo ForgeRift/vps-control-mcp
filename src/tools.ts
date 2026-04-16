@@ -359,7 +359,8 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   /\.my\.cnf/,                       // MySQL credentials
   /\.docker\/config\.json/,          // Docker registry credentials
   /kubeconfig/i,                     // Kubernetes credentials
-  /\.aws\//,                         // AWS credentials
+  /\.aws\//,                         // AWS credentials (~/.aws/)
+  /\/aws\/(config|credentials)/i,    // AWS CLI config/credentials outside ~/.aws/
   /\.gcloud\//,                      // GCP credentials
   /\.azure\//,                       // Azure credentials
 ];
