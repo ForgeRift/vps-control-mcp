@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
@@ -31,6 +31,20 @@ interface DeployJob {
   log:         string[];
 }
 const deployJobs = new Map<string, DeployJob>();
+
+// ─── Background Command Job Store ─────────────────────────────────────────────
+// Stores results of long-running run_approved_command calls (run_in_background=true).
+// Fixes SSE connection drops on commands >60s (apt-get, npm install, etc.).
+interface BackgroundJob {
+  id:        string;
+  command:   string;
+  startedAt: Date;
+  status:    'running' | 'success' | 'failed';
+  stdout:    string;
+  stderr:    string;
+  exitCode:  number | null;
+}
+const bgJobs = new Map<string, BackgroundJob>();
 
 // ─── File-based job persistence (VC-8) ───────────────────────────────────────
 // deploy_vps_mcp restarts this process mid-deploy, wiping the in-memory Map.
@@ -82,22 +96,26 @@ function startDeployJob(
   const id = `deploy-${Date.now()}`;
   const label = type === 'sharpedge' ? 'SharpEdge' : 'vps-control-mcp';
   const job: DeployJob = {
-    id, type, description,
+    id,
+    type,
+    description,
     startedAt: new Date(),
-    status: 'running',
-    log: [`=== ${label} Deploy: ${description} ===`, ''],
+    status:    'running',
+    log:       [`=== ${label} deploy started ===`, `Description: ${description}`, ''],
   };
+
   deployJobs.set(id, job);
-  persistJob(job); // initial write
+  persistJob(job);
 
   // Fire-and-forget — returns before steps complete to avoid MCP timeout
   (async () => {
     for (const step of steps) {
-      job.log.push('--- ' + step.label + ' ---');
+      job.log.push(`--- ${step.label} ---`);
+      persistJob(job);
       try {
-        const { stdout, stderr } = await runCmd(step.cmd, step.args, step.cwd);
-        job.log.push([stdout, stderr].filter(Boolean).join('\n').trim() || '[no output]');
-        persistJob(job); // update after each step
+        const result = await runCmd(step.cmd, step.args, step.cwd);
+        if (result.stdout) job.log.push(result.stdout.trim());
+        if (result.stderr) job.log.push(result.stderr.trim());
       } catch (err) {
         job.log.push('FAILED: ' + (err as Error).message);
         job.log.push('');
@@ -117,6 +135,76 @@ function startDeployJob(
   });
 
   return id;
+}
+
+// ─── Background Command Jobs ──────────────────────────────────────────────────
+// For run_approved_command with run_in_background=true.
+// spawn() streams output in real time; tool returns job_id immediately.
+// Claude polls with get_job_status until status is success|failed.
+
+function startBackgroundJob(command: string): string {
+  const id = `job-${Date.now()}`;
+  const job: BackgroundJob = {
+    id,
+    command,
+    startedAt: new Date(),
+    status:    'running',
+    stdout:    '',
+    stderr:    '',
+    exitCode:  null,
+  };
+  bgJobs.set(id, job);
+
+  const parts = command.trim().split(/\s+/);
+  const [cmd, ...args] = parts;
+  const child = spawn(cmd, args, { detached: false });
+
+  child.stdout.on('data', (chunk: Buffer) => { job.stdout += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { job.stderr += chunk.toString(); });
+  child.on('close', (code: number | null) => {
+    job.exitCode = code;
+    job.status   = (code === 0) ? 'success' : 'failed';
+  });
+  child.on('error', (err: Error) => {
+    job.stderr  += '\nProcess error: ' + err.message;
+    job.status   = 'failed';
+    job.exitCode = -1;
+  });
+
+  return id;
+}
+
+async function getJobStatus(jobId: string): Promise<string> {
+  if (!jobId || !jobId.trim()) {
+    if (bgJobs.size === 0) return 'No background jobs this session.';
+    const list = [...bgJobs.values()]
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+      .map(j => {
+        const elapsed = Math.round((Date.now() - j.startedAt.getTime()) / 1000);
+        return `  ${j.id}  [${j.status}]  ${elapsed}s ago  "${j.command}"`;
+      });
+    return 'Background jobs this session:\n' + list.join('\n');
+  }
+
+  const job = bgJobs.get(jobId.trim());
+  if (!job) {
+    const ids = [...bgJobs.keys()].join(', ') || '(none)';
+    return `No job found with id "${jobId}". Known job IDs: ${ids}`;
+  }
+
+  const elapsed = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
+  const combined = [job.stdout, job.stderr].filter(Boolean).join('\n');
+  const lines = [
+    `Job:     ${job.id}`,
+    `Command: ${job.command}`,
+    `Status:  ${job.status}`,
+    `Elapsed: ${elapsed}s`,
+    job.exitCode !== null ? `Exit:    ${job.exitCode}` : '',
+    '',
+    combined ? '--- Output ---\n' + combined : '(no output yet)',
+  ].filter(l => l !== '').join('\n');
+
+  return truncate(lines);
 }
 
 
@@ -365,7 +453,8 @@ async function getSystemHealth(): Promise<string> {
 async function runApprovedCommand(
   command: string,
   justification: string,
-  dryRun: boolean
+  dryRun: boolean,
+  runInBackground: boolean
 ): Promise<string> {
   validateCommand(command);
 
@@ -378,6 +467,9 @@ async function runApprovedCommand(
       'DRY RUN — nothing executed.',
       `Would run: ${command}`,
       `Justification: ${justification}`,
+      runInBackground
+        ? 'Mode: background job (returns job_id immediately; poll with get_job_status)'
+        : 'Mode: synchronous (waits for completion)',
       `Session usage: ${customCommandCount}/${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION} custom commands used.`,
       'Call with dry_run=false to execute.',
     ].join('\n');
@@ -391,11 +483,23 @@ async function runApprovedCommand(
     );
   }
 
+  // Increment before branching — both sync and async paths consume one quota slot
+  customCommandCount++;
+
+  if (runInBackground) {
+    const jobId = startBackgroundJob(command);
+    return [
+      `Background job started: ${jobId}`,
+      `Command: ${command}`,
+      '',
+      `Use get_job_status with job_id="${jobId}" to poll for output.`,
+      'Typical poll interval: 15–30s for long commands.',
+    ].join('\n');
+  }
+
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
   const { stdout, stderr } = await exec(cmd, args);
-  // Only increment after successful execution — failed commands do not consume quota
-  customCommandCount++;
   const output = [stdout, stderr].filter(Boolean).join('\n');
   return truncate(output.trim() || '[Command completed with no output]');
 }
@@ -511,21 +615,23 @@ async function getDeployStatus(jobId: string): Promise<string> {
   }
 
   const elapsed = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
-  const selfRestartNote = fromFile && job.status === 'running'
-    ? '\n[Note: job was still "running" when vps-mcp restarted itself (VC-8). Deploy likely succeeded — verify with get_pm2_status.]'
+  const selfRestartNote = fromFile
+    ? '\n[Recovered from file — vps-mcp restarted during this deploy, which is expected for deploy_vps_mcp.]\n'
     : '';
-  return [
-    `Job:     ${job.id}`,
-    `Type:    ${job.type}`,
-    `Status:  ${job.status}` + (fromFile ? ' (recovered from file)' : ''),
-    `Elapsed: ${elapsed}s`,
-    '',
-    '--- Log ---',
-    job.log.join('\n') + selfRestartNote,
-  ].join('\n');
-}
 
-// ─── Tool Definitions (MCP schema) ───────────────────────────────────────────
+  const lines = [
+    `Job:         ${job.id}`,
+    `Type:        ${job.type}`,
+    `Description: ${job.description}`,
+    `Status:      ${job.status}`,
+    `Elapsed:     ${elapsed}s`,
+    selfRestartNote,
+    '--- Log ---',
+    ...job.log,
+  ].join('\n');
+
+  return truncate(lines);
+}
 
 export const TOOLS = [
   {
@@ -642,11 +748,23 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        command:       { type: 'string', description: 'Command to run. Destructive patterns are blocked server-side.' },
-        justification: { type: 'string', description: 'Why structured tools cannot cover this. Min 10 chars.' },
-        dry_run: { description: 'Default true. Set false only after previewing.' },
+        command:           { type: 'string',  description: 'Command to run. Destructive patterns are blocked server-side.' },
+        justification:     { type: 'string',  description: 'Why structured tools cannot cover this. Min 10 chars.' },
+        dry_run:           { description: 'Default true. Set false only after previewing.' },
+        run_in_background: { type: 'boolean', description: 'Default false. Set true for commands that take >30s (apt-get, npm install, etc.). Returns a job_id immediately; poll with get_job_status.' },
       },
       required: ['command', 'justification'],
+    },
+  },
+  {
+    name: 'get_job_status',
+    description: 'Check the status and output of a background command job started by run_approved_command with run_in_background=true. Omit job_id to list all jobs this session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'Job ID returned by run_approved_command. Omit to list all jobs.' },
+      },
+      required: [] as string[],
     },
   },
   {
@@ -745,8 +863,12 @@ export async function executeTool(
         return await runApprovedCommand(
           args.command as string,
           args.justification as string,
-          parseBool(args.dry_run, true)
+          parseBool(args.dry_run, true),
+          parseBool(args.run_in_background, false)
         );
+
+      case 'get_job_status':
+        return await getJobStatus((args.job_id as string) ?? '');
 
       case 'deploy':
         return await deploySharpEdge(
