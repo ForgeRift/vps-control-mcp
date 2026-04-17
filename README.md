@@ -1,6 +1,6 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/claudedussy/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](https://github.com/claudedussy/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
@@ -153,6 +153,14 @@ Add to `claude_desktop_config.json`:
 
 Then restart Claude Desktop.
 
+## Working with Claude
+
+This MCP is designed to let Claude operate your VPS directly — no copy-paste of commands into your terminal, no SSH sessions you have to babysit. For best results, let Claude drive.
+
+- **How to use the tools well:** [docs/USING_WITH_CLAUDE.md](docs/USING_WITH_CLAUDE.md) — the full operating manual for Claude, covering the security model, tool preferences, and behavioral rules.
+- **What can go wrong:** [KNOWN_ISSUES.md](KNOWN_ISSUES.md) — honest list of current limitations and caveats, including the probabilistic nature of LLM rule-following and what to do if Claude occasionally suggests a manual command instead of using a tool.
+- **What's changing:** [CHANGELOG.md](CHANGELOG.md) — release history. Iteration velocity is a feature, not a bug.
+
 ## Transport & Reliability
 
 vps-control-mcp uses **streamable HTTP** with automatic reconnection:
@@ -177,6 +185,8 @@ MIT. See [LICENSE](LICENSE) for details.
 
 - **Issues:** [GitHub Issues](https://github.com/claudedussy/vps-control-mcp/issues)
 - **Security:** Report to security@sharpedge.io
+- **Known issues:** [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 - **Documentation:** [Full docs](docs/)
 
 ---

@@ -1,4 +1,6 @@
-# vps-control-mcp — Claude Operating Instructions
+# vps-control-mcp — Operating Manual for Claude
+
+> **About this document.** This file is a human-readable version of the behavioral rules that ship embedded in the MCP's tool descriptions and SessionStart hook. It is written in second person ("you") because the intended reader is Claude — but the purpose of keeping it in the repo is so users, reviewers, and contributors can read exactly what we're asking Claude to do when it works with this MCP. Transparency is the point. The runtime enforcement happens at the tool-description and hook level, not by Claude auto-loading this file.
 
 You are connected to the user's remote Linux VPS via vps-control-mcp. Follow these instructions automatically — the user should never need to explain this workflow to you.
 
