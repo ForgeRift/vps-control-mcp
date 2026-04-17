@@ -104,7 +104,7 @@ or the equivalent in your provider's console.
 
 - Code: https://github.com/claudedussy/vps-control-mcp
 - Security test suite: `src/__tests__/security.test.ts` (181 tests, `npm test` to run)
-- Adversarial review notes: `ADVERSARIAL_REVIEW_S35.md` (8 findings, all closed in v1.3.0 + v1.4.0)
+- Adversarial review notes: `ADVERSARIAL_REVIEW.md` (8 findings F-VM-1 … F-VM-8, all closed in v1.3.0 with two follow-up fixes in `f751409` and `862c732`)
 - Changelog: `CHANGELOG.md`
 - Known issues: `KNOWN_ISSUES.md`
 
