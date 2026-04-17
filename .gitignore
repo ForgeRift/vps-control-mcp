@@ -4,3 +4,4 @@ dist/
 *.log
 deploy-jobs.json
 .mcp.json
+.commit-msg.txt
