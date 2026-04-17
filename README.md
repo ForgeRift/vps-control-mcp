@@ -1,6 +1,6 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/anthropics/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/claudedussy/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
@@ -45,7 +45,7 @@ For the full security model, see [SECURITY.md](SECURITY.md).
 ### Quick Start
 
 ```bash
-curl https://raw.githubusercontent.com/anthropics/vps-control-mcp/main/setup.sh | bash
+curl https://raw.githubusercontent.com/claudedussy/vps-control-mcp/main/setup.sh | bash
 ```
 
 The setup script:
@@ -58,7 +58,7 @@ The setup script:
 ### Manual Installation
 
 ```bash
-git clone https://github.com/anthropics/vps-control-mcp.git
+git clone https://github.com/claudedussy/vps-control-mcp.git
 cd vps-control-mcp
 npm install
 npm run build
@@ -175,10 +175,10 @@ MIT. See [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/anthropics/vps-control-mcp/issues)
-- **Security:** Report to security@anthropic.com
+- **Issues:** [GitHub Issues](https://github.com/claudedussy/vps-control-mcp/issues)
+- **Security:** Report to security@sharpedge.io
 - **Documentation:** [Full docs](docs/)
 
 ---
 
-**Built by Anthropic** | [Cloud documentation](https://modelcontextprotocol.io/)
+**Built by SharpEdge** | [Model Context Protocol](https://modelcontextprotocol.io/)

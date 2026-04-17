@@ -1,6 +1,6 @@
 {
   "name": "vps-control",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 100+ hard-blocked patterns, sensitive file protection, OAuth 2.0 authentication, rate limiting, and full audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
   "author": {
     "name": "SharpEdge",
