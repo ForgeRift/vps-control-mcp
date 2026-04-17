@@ -1,6 +1,6 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](https://github.com/claudedussy/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/claudedussy/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 

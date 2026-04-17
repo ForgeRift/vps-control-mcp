@@ -12,10 +12,10 @@ This is the current list of known limitations and caveats for vps-control-mcp. W
 
 **Why this happens:** Large language models follow instructions probabilistically, not deterministically. Our guidance to Claude — "use the tools, don't suggest SSH, don't ask the user to paste commands" — lives in tool descriptions and a SessionStart briefing, and it wins the vast majority of the time. But strong training priors toward demonstrating commands for users to run can occasionally leak through, especially in very long sessions with a lot of prior pattern buildup.
 
-**What we do about it:**
-- Every tool description embeds explicit anti-patterns ("USE THIS instead of asking the user to run...")
-- A SessionStart hook plants the behavioral rules at the top of each new session
-- Each support ticket reporting an instance of this behavior becomes a new anti-pattern sentence in the next release, making the rules progressively sharper
+**What we do about it (shipped as of v1.4.0):**
+- **Per-turn lever:** every tool description embeds an explicit "USE THIS — never ask the user to run…" anti-pattern clause. These descriptions are re-sent to the model on every tool-list request and are not subject to system-prompt truncation, so they ride along in the freshest part of context every turn.
+- **Per-session lever:** a `SessionStart` hook (`hooks/briefing.js`) emits a behavioral briefing at startup, resume, clear, and compact. The briefing maps common user intents to the correct tool and restates the three-tier security model and the dry-run-first rule. Fails closed — a broken briefing never blocks a session.
+- **Iteration loop:** each support ticket reporting an instance of this behavior becomes a new anti-pattern sentence in the next release, making the rules progressively sharper.
 
 **What to do if you hit it:**
 1. Tell Claude explicitly: "Use the vps-control tools instead of asking me to run commands." — this usually resolves it for the rest of the session
