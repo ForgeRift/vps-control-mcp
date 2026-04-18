@@ -92,3 +92,129 @@ npm test
 Expected: 181 tests pass, exit code 0.
 
 If any test fails, treat it as a security regression and open a GitHub issue.
+
+---
+
+# Fourth-Pass Adversarial Review — v1.7.0
+
+**Review performed:** 2026-04-18 (Claude Opus hostile fourth pass)
+**Hardening completed:** 2026-04-18 (Sonnet continuation, S50)
+**Status:** All 13 findings closed. Shipped as v1.7.0.
+
+The fourth pass targeted structural gaps missed by the third pass: (1) the positive allowlist's per-binary validators used `rejectSensitiveArgs` (pattern-only) instead of `validatePath` (realpath + `ALLOWED_READ_DIRS` + pattern), letting symlink escapes and out-of-allowlist reads through any reader command; (2) two pre-auth memory/quota DoS vectors against `authCodes` and the Supabase token cache; (3) a PKCE downgrade via empty `code_challenge`; and (4) several hardening gaps (PCRE ReDoS, version constant, uptime leak, JOBS_FILE race).
+
+---
+
+## Findings
+
+### F-OP-20 — CRITICAL — Symlink escape via `run_approved_command` file readers
+**Attack vector:** Attacker pushes a tracked symlink to the repo (e.g. `services.json → /etc/shadow`) via a compromised contributor. `git pull` materialises it. `cat /root/sharpedge/services.json` passes `rejectSensitiveArgs` (literal string check) because the name doesn't match any sensitive pattern, then reads `/etc/shadow` as root.
+**Root cause:** `validatePath` (realpath + `ALLOWED_READ_DIRS` + patterns) was only called from `read_file_section` and `search_file`. The per-binary validators in `run_approved_command` used `rejectSensitiveArgs` which checks only the literal argument string.
+**Fix:** Added `validateArgPath()` helper that wraps `validatePath()` for absolute paths and applies `SENSITIVE_FILE_PATTERNS` to relative paths. Applied to all file-reading POSITIVE_ALLOWLIST entries (`cat`, `head`, `tail`, `wc`, `ls`, `du`, `stat`, `file`, `diff`, `sort`, `uniq`, `tr`, `cut`, `paste`, `jq`).
+**Status:** FIXED (commit `a7...`)
+
+---
+
+### F-OP-21 — CRITICAL — Sensitive system files readable via `sort`/`uniq`/`cut`/`sed`/etc.
+**Attack vector:** `sort /etc/passwd`, `cut -d: -f1 /etc/passwd`, `diff /etc/passwd /tmp/empty` — any reader on the positive allowlist could read any path outside `ALLOWED_READ_DIRS`. Also: `cat /root/.bash_history`, `cat /root/.cache/gh/hosts.yml`.
+**Fix:** Same structural fix as F-OP-20 — `validateArgPath()` enforces `ALLOWED_READ_DIRS` allowlist default-deny for absolute path arguments across all reader validators.
+**Status:** FIXED (same commit as F-OP-20)
+
+---
+
+### F-OP-22 — CRITICAL — Unbounded `authCodes` Map + per-code timers; unauth memory DoS
+**Attack vector:** `/authorize` is unauthenticated. Flood with large `code_challenge` values (up to Node's ~16KB URL limit). Each request: (1) calls `authCodes.set()` with no size cap, (2) schedules a 5-min `setTimeout`. At 1000 req/s × 5 min: 300K entries × 16KB ≈ 5GB RSS + 300K live timers.
+**Fix:** (1) `AUTH_CODES_MAX = 1000` with FIFO eviction helper `insertAuthCode()` that clears the evicted entry's timer. (2) Length caps: `code_challenge` ≤ 128 chars, `state` ≤ 256 chars, `redirect_uri` ≤ 1024 chars — all reject with 400 before Map insertion.
+**Status:** FIXED
+
+---
+
+### F-OP-23 — HIGH — Random Bearer tokens exhaust Supabase plan quota
+**Attack vector:** Flood `/mcp` with random unique Bearer tokens. Each misses the 1000-entry positive cache, evicts a real token, triggers a Supabase REST call. Effects: quota exhaustion → real paying users get `false` cached → product appears broken.
+**Fix:** (1) Token shape pre-validation (length 16–512, printable ASCII only) before any Supabase call — blocks random hex/binary tokens with no round-trip. (2) Separate negative cache (5000 entries, 30-min TTL) — random-token flood fills this instead of evicting the positive cache.
+**Status:** FIXED
+
+---
+
+### F-OP-24 — HIGH — `node script.js` executes any path outside `ALLOWED_READ_DIRS`
+**Attack vector:** `run_approved_command(command="node /tmp/payload.js")`. `validateNodeArgs` blocked eval/inspect flags but the positional script path fell through to `rejectSensitiveArgs` — no `ALLOWED_READ_DIRS` check.
+**Fix:** `validateNodeArgs` script path argument now goes through `validateArgPath`, enforcing `ALLOWED_READ_DIRS` + sensitive patterns.
+**Status:** FIXED
+
+---
+
+### F-OP-25 — HIGH — Refresh-token `setTimeout` handles leak across FIFO eviction
+**Attack vector:** Authenticated user rotates refresh tokens at 60/min. Each rotation: (1) deletes old token, (2) inserts new token (FIFO-evicts when ≥ 500), (3) schedules a 24-day `setTimeout`. Map bounded at 500; timer queue unbounded. After ~24 hours of rotation: ~86K live timers ≈ 17MB accumulating.
+**Fix:** Added `timer` field to `RefreshTokenEntry`. Added `insertRefreshToken()` FIFO helper that calls `clearTimeout(oldest[1].timer)` on eviction. All removal paths (`authCodes.delete`, `refreshTokens.delete`) clear the timer handle.
+**Status:** FIXED
+
+---
+
+### F-OP-26 — HIGH — PKCE downgrade via empty `code_challenge` with `code_challenge_method=S256`
+**Attack vector:** `GET /authorize?...&code_challenge=&code_challenge_method=S256`. Empty string is falsy → `entry.codeChallenge` never set → `/token` skips PKCE verification entirely. Client signals S256 but gets plain-code flow.
+**Fix:** When `code_challenge_method` is present, require a non-empty `code_challenge` matching `/^[A-Za-z0-9_\-.~]{43,128}$/` (RFC 7636 base64url shape). Returns 400 otherwise.
+**Status:** FIXED
+
+---
+
+### F-OP-27 — MEDIUM — `grep -P` enables PCRE ReDoS; no shape guard on allowlist grep
+**Attack vector:** `run_approved_command(command="grep -P '(.*)+x' /var/log/syslog")` with `run_in_background=true` pins a CPU core for the 10-minute timeout.
+**Fix:** `validateGrepArgs` now rejects `-P` / `--perl-regexp` flags with an explicit message. Pattern args for allowlist grep also checked via `validateArgPath`.
+**Status:** FIXED
+
+---
+
+### F-OP-28 — MEDIUM — `ls /etc` enumerates filesystem outside allowlist
+**Attack vector:** `ls /etc` returns all filenames in `/etc`, providing a kill-chain roadmap.
+**Fix:** Subsumed by F-OP-20/21 fix — `validateArgPath` enforces `ALLOWED_READ_DIRS` on `ls` path arguments. `ls /etc` returns BLOCKED.
+**Status:** FIXED (covered by F-OP-20/21)
+
+---
+
+### F-OP-29 — MEDIUM — `pgrep -f` / `pgrep -a` leaks process command lines
+**Attack vector:** `pgrep -af .` lists all PIDs + full cmdlines, including any secrets passed via argv (`--password=foo`, `--key=bar`).
+**Fix:** Removed `-a` and `-f` from the pgrep flag allowlist. `-l` (name only) is the maximum permitted.
+**Status:** FIXED
+
+---
+
+### F-OP-30 — MEDIUM — `CURRENT_VERSION` hardcoded; prior closure (F-OP-15) was not applied
+**Evidence:** `index.ts` had `const CURRENT_VERSION = '1.6.0'` as a literal string. The F-OP-15 closure note said it read from `package.json` — it did not. This also undermined confidence in prior pass closure claims.
+**Fix:** At startup, `CURRENT_VERSION` is populated via `JSON.parse(fs.readFileSync(pkgPath)).version` with a fallback constant if `package.json` is unreadable. `package.json` version bumped to `1.7.0`.
+**Status:** FIXED
+
+---
+
+### F-OP-31 — LOW — Unauthenticated `/health` response leaks uptime
+**Attack vector:** `/health` returned `{ status, uptime_s, version }` to any caller. `uptime_s` reveals restart frequency — useful for timing attacks and fingerprinting.
+**Fix:** Unauthenticated `/health` now returns `{ status: 'ok' }` only. Uptime and version remain available to authenticated callers via the MCP tool surface.
+**Status:** FIXED
+
+---
+
+### F-OP-32 — LOW — `persistJob()` race on concurrent deploys corrupts `JOBS_FILE`
+**Attack vector:** Two concurrent deploy calls both read, modify, and write `JOBS_FILE` — the last writer wins and the other's update is lost. On a crash mid-write, the file is partially written.
+**Fix:** Atomic write: `fs.writeFileSync(JOBS_FILE + '.tmp', ...)` then `fs.renameSync(tmp, JOBS_FILE)`. `renameSync` is atomic on POSIX at the filesystem level.
+**Status:** FIXED
+
+---
+
+## v1.7.0 Fix Summary
+
+All 13 fourth-pass findings closed:
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| F-OP-20 | CRITICAL | `validateArgPath()` for all file-reading POSITIVE_ALLOWLIST entries |
+| F-OP-21 | CRITICAL | Same structural fix; `ALLOWED_READ_DIRS` default-deny enforced |
+| F-OP-22 | CRITICAL | `authCodes` size cap (1000) + FIFO + `clearTimeout`; input length caps |
+| F-OP-23 | HIGH | Token shape pre-validation + split positive/negative auth cache |
+| F-OP-24 | HIGH | `node` script path via `validateArgPath` |
+| F-OP-25 | HIGH | `refreshTokens` timer handles stored + cleared on all removal paths |
+| F-OP-26 | HIGH | PKCE S256 requires non-empty, valid-charset `code_challenge` |
+| F-OP-27 | MEDIUM | `grep -P` / `--perl-regexp` blocked in `validateGrepArgs` |
+| F-OP-28 | MEDIUM | Covered by F-OP-20/21 fix |
+| F-OP-29 | MEDIUM | `pgrep -a` / `-f` removed from allowlist |
+| F-OP-30 | MEDIUM | `CURRENT_VERSION` read from `package.json` at startup |
+| F-OP-31 | LOW | `/health` returns `{status:'ok'}` only for unauth callers |
+| F-OP-32 | LOW | Atomic `JOBS_FILE` write via tmp + `renameSync` |
