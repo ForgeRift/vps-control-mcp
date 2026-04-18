@@ -591,6 +591,32 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // --- HTTP server (exposes files) ---
   { pattern: /\bpython[\d.]*\s+-m\s+http/,  category: 'http-server', reason: 'Starting an HTTP server is prohibited.' },
   { pattern: /\bphp\s+-S\b/,                category: 'http-server', reason: 'Starting an HTTP server is prohibited.' },
+
+  // --- F-NEW-5: git subcommands enabling hook-chained RCE via git_pull --------
+  { pattern: /\bgit\s+init\b/,              category: 'code-exec',   reason: 'git init is prohibited (creates attacker-controlled repos for hook-chained RCE).' },
+  { pattern: /\bgit\s+remote\s+add\b/,      category: 'code-exec',   reason: 'git remote add is prohibited (enables hook-chained RCE via git_pull).' },
+  { pattern: /\bgit\s+fetch\b/,             category: 'data-exfil',  reason: 'git fetch is prohibited (enables hook execution from remote repos).' },
+
+  // --- F-NEW-8: env -0 / env -i dump all environment variables ----------------
+  { pattern: /\benv\s+(-0|--null|-i|--ignore-environment)\b/, category: 'info-leak', reason: 'env -0/env -i dumps all environment variables including secrets.' },
+
+  // --- F-NEW-9: SSH host private key access ------------------------------------
+  { pattern: /\/etc\/ssh\/ssh_host_\w+_key/, category: 'info-leak', reason: 'SSH host private key access is prohibited.' },
+
+  // --- F-NEW-11: ln --symbolic long-form bypass --------------------------------
+  { pattern: /\bln\s+--symbolic\b/,          category: 'file-write', reason: 'Symlink creation (ln --symbolic long-form) is prohibited.' },
+
+  // --- F-NEW-13: DNS and network info tools ------------------------------------
+  { pattern: /\bhost\s/,                     category: 'info-leak',  reason: 'DNS lookup (host) is prohibited.' },
+  { pattern: /\bdig\b/,                      category: 'info-leak',  reason: 'DNS lookup (dig) is prohibited.' },
+  { pattern: /\bnslookup\b/,                 category: 'info-leak',  reason: 'DNS lookup (nslookup) is prohibited.' },
+  { pattern: /\bgetent\b/,                   category: 'info-leak',  reason: 'getent (NSS lookup) is prohibited.' },
+
+  // --- F-NEW-18: system log access ---------------------------------------------
+  { pattern: /\bjournalctl\b/,               category: 'info-leak',  reason: 'journalctl is prohibited (system log access).' },
+  { pattern: /\bdmesg\b/,                    category: 'info-leak',  reason: 'dmesg is prohibited (kernel log access).' },
+  { pattern: /\blast\s/,                     category: 'info-leak',  reason: 'last is prohibited (login history).' },
+  { pattern: /\blastlog\b/,                  category: 'info-leak',  reason: 'lastlog is prohibited (login history).' },
 ];
 
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
@@ -763,10 +789,13 @@ async function searchFile(
   const ctx = Math.min(Math.max(0, contextLines), 10);
 
   try {
+    // F-NEW-19: insert '--' before pattern so a pattern starting with '-'
+    // is never interpreted as a grep flag (e.g. pattern="-r /etc/shadow ./")
     const { stdout } = await exec('grep', [
       '-n',
       `-A${ctx}`,
       `-B${ctx}`,
+      '--',
       pattern,
       safePath,
     ]);
@@ -789,18 +818,26 @@ async function gitLog(count: number): Promise<string> {
   return stdout.trim();
 }
 
-async function gitPull(dryRun: boolean, directory?: string): Promise<string> {
-  if (directory) capString(directory, INPUT_LIMITS.path, 'directory');
-  const dir = directory?.trim() || CONFIG.APP_DIR;
+async function gitPull(dryRun: boolean, _directory?: string): Promise<string> {
+  // F-NEW-5: directory param is intentionally ignored and locked to CONFIG.APP_DIR.
+  // An attacker who runs `git init /tmp/pwn && git remote add origin <evil>` can
+  // chain git_pull(directory="/tmp/pwn") to execute arbitrary hooks as root.
+  // Locking to APP_DIR closes this regardless of what the caller passes.
+  const dir = CONFIG.APP_DIR;
   if (dryRun) {
     return [
       'DRY RUN — nothing executed.',
-      'Would run: git pull origin main',
-      `Working directory: ${dir}`,
+      `Would run: git pull origin main (locked to ${dir})`,
       'Call with dry_run=false to execute.',
     ].join('\n');
   }
-  const { stdout, stderr } = await exec('git', ['-C', dir, 'pull', 'origin', 'main']);
+  // F-NEW-5: core.hooksPath=/dev/null prevents execution of any repo hooks
+  // (post-merge, post-checkout, etc.) that an attacker could plant in the repo.
+  const { stdout, stderr } = await exec('git', [
+    '-C', dir,
+    '-c', 'core.hooksPath=/dev/null',
+    'pull', 'origin', 'main',
+  ]);
   return [stdout, stderr].filter(Boolean).join('\n').trim();
 }
 

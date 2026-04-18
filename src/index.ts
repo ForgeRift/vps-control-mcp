@@ -529,7 +529,15 @@ app.get('/sse', (_req, res) => {
 
 const CURRENT_VERSION = '1.3.0';
 
-app.get('/health', async (_req, res) => {
+app.get('/health', async (req, res) => {
+  // F-NEW-15: unauthenticated callers get a minimal response only.
+  // Full diagnostics (session count, version, security config) require a valid token.
+  const authenticated = await validateAuth(req);
+  if (!authenticated) {
+    res.json({ status: 'ok', uptime_s: Math.round(process.uptime()) });
+    return;
+  }
+
   // Check for updates from GitHub releases (cached 1 hour)
   let latestVersion: string | null = null;
   try {
