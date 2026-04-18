@@ -144,6 +144,17 @@ function createMcpServer(): Server {
 
 const app = express();
 
+// F-OP-37: Bind trust-proxy to loopback ONLY. nginx (the documented TLS front-door)
+// runs on 127.0.0.1 and is instructed to OVERWRITE X-Forwarded-For with $remote_addr
+// (not the default $proxy_add_x_forwarded_for which appends the client's forged value).
+// With trust-proxy = 'loopback', Express populates req.ip from the last hop in the
+// XFF chain that came from a trusted IP — which is the nginx-supplied real client IP.
+// Any XFF header sent by a non-loopback peer is ignored entirely.
+// If the deploy topology changes (nginx moves off-box, or a different proxy is used),
+// update this to the specific IP/CIDR of the front-door — never set it to 'true'
+// (which trusts all hops) or to a large CIDR that includes client networks.
+app.set('trust proxy', 'loopback');
+
 // --- CORS (browser-based MCP clients need this) ------------------------------
 // F-OP-14: Reflect origin only if it is in ALLOWED_REDIRECT_HOSTS — eliminates the
 // "any origin can make authenticated requests" gap from CORS: *.
@@ -225,10 +236,9 @@ function checkIpRateLimit(ip: string): boolean {
   return true;
 }
 
-function callerIp(req: express.Request): string {
-  const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
-  return fwd || req.ip || req.socket.remoteAddress || 'unknown';
-}
+// callerIp lives in ./http-utils so tests can import it without triggering app.listen
+import { callerIp } from './http-utils.js';
+export { callerIp };
 
 // Prune IP buckets every 5 minutes
 setInterval(() => {

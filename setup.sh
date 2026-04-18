@@ -167,6 +167,11 @@ server {
         proxy_set_header   Connection 'upgrade';
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
+        # F-OP-37: OVERWRITE X-Forwarded-For with the real client address.
+        # Do NOT use \$proxy_add_x_forwarded_for — that appends the client-supplied
+        # value, which lets the client forge the first entry. Express's trust-proxy
+        # binding (loopback) relies on this header being trustworthy.
+        proxy_set_header   X-Forwarded-For \$remote_addr;
         proxy_cache_bypass \$http_upgrade;
 
         # SSE requires these — do not buffer

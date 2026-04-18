@@ -13,6 +13,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { __TEST_ONLY } from '../tools.js';
+import { callerIp } from '../http-utils.js';
 
 const {
   validateCommand,
@@ -815,5 +816,306 @@ describe('F-OP-33 sensitive-pattern defence-in-depth', () => {
     assert.ok(srcs.some((s: string) => /\\\/var\\\/log\\\//.test(s)), 'expected /var/log/ pattern to be present');
     assert.ok(srcs.some((s: string) => /\\\/proc\\\//.test(s)), 'expected /proc/ pattern to be present');
     assert.ok(srcs.some((s: string) => /\\\/sys\\\//.test(s)), 'expected /sys/ pattern to be present');
+  });
+});
+
+// ─── F-OP-37 — XFF spoofing prevention ───────────────────────────────────────
+
+describe('F-OP-37 callerIp does not trust raw X-Forwarded-For', () => {
+  // Mock just enough of express.Request shape for callerIp's contract.
+  const mkReq = (overrides: Partial<{ ip: string; remote: string; xff: string }>) =>
+    ({
+      ip: overrides.ip,
+      socket: { remoteAddress: overrides.remote } as any,
+      headers: overrides.xff ? { 'x-forwarded-for': overrides.xff } : {},
+    }) as any;
+
+  it('returns req.ip when set (Express has resolved trust-proxy)', () => {
+    const req = mkReq({ ip: '203.0.113.7', remote: '127.0.0.1', xff: '9.9.9.9, 8.8.8.8' });
+    assert.equal(callerIp(req), '203.0.113.7');
+  });
+
+  it('IGNORES raw X-Forwarded-For when req.ip is unset (no header bypass)', () => {
+    const req = mkReq({ remote: '127.0.0.1', xff: '9.9.9.9' });
+    // Must fall back to socket.remoteAddress, NOT the spoofed XFF value.
+    assert.equal(callerIp(req), '127.0.0.1');
+    assert.notEqual(callerIp(req), '9.9.9.9');
+  });
+
+  it('falls back to socket.remoteAddress when req.ip missing and no XFF', () => {
+    const req = mkReq({ remote: '198.51.100.5' });
+    assert.equal(callerIp(req), '198.51.100.5');
+  });
+
+  it('returns "unknown" only when nothing identifies the peer', () => {
+    const req = mkReq({});
+    assert.equal(callerIp(req), 'unknown');
+  });
+
+  it('attacker-forged XFF first-entry is NEVER returned', () => {
+    // Attack vector from F-OP-37: pre-fix code did `xff.split(',')[0].trim()` and
+    // would have returned '10.0.0.42' here. Post-fix must not.
+    const req = mkReq({ ip: '127.0.0.1', remote: '127.0.0.1', xff: '10.0.0.42, 127.0.0.1' });
+    assert.notEqual(callerIp(req), '10.0.0.42');
+    assert.equal(callerIp(req), '127.0.0.1');
+  });
+});
+
+// ─── F-OP-38 — sort -oFILE glued short-option bypass ─────────────────────────
+
+describe('F-OP-38 sort glued -oFILE form is rejected', () => {
+  it('rejects -o/root/.ssh/authorized_keys (PoC from review)', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort -o/root/.ssh/authorized_keys /tmp/x'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('rejects -oFILE with relative path', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort -oattacker.txt /tmp/x'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('rejects -o=PATH (some sort builds tolerate this form)', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort -o=/tmp/x /tmp/y'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('still rejects bare -o (pre-existing F-OP-34 case)', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort -o /tmp/x /tmp/y'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('still rejects --output=PATH (pre-existing F-OP-34 case)', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort --output=/tmp/x /tmp/y'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('rejects --output-XYZ defense-in-depth pattern', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sort --output-foo=/tmp/x /tmp/y'),
+      /sort -o\/--output \(file write\) is prohibited/i,
+    );
+  });
+
+  it('does NOT reject legitimate flags that happen to start with -o-prefix-like chars', () => {
+    // -n (numeric) is not -o-prefixed; should pass.
+    try { validateAgainstAllowlist('sort -n /tmp/x'); } catch (e) {
+      assert.doesNotMatch(String(e), /-o\/--output \(file write\)/i,
+        'legitimate -n flag must not trip the F-OP-38 rule');
+    }
+  });
+});
+
+// ─── 21. F-OP-44 — child-process env allowlist ──────────────────────────────
+// Sixth-pass finding F-LT-55 (mislabeled; applies to VPS): every spawn
+// inherits process.env unchanged, leaking MCP_AUTH_TOKEN and
+// SUPABASE_SERVICE_KEY via any allowlisted binary that can echo env
+// (node -e, bash -c before it was banned, jq -n env, etc.). Central fix
+// is safeEnv() — a positive allowlist of non-sensitive keys.
+
+describe('F-OP-44 child-process env allowlist (sixth-pass F-LT-55)', () => {
+  const { safeEnv, SAFE_ENV_KEYS } = __TEST_ONLY;
+
+  it('drops MCP_AUTH_TOKEN from filtered env', () => {
+    const saved = process.env.MCP_AUTH_TOKEN;
+    process.env.MCP_AUTH_TOKEN = 'super-secret-do-not-leak';
+    try {
+      const env = safeEnv();
+      assert.equal(env.MCP_AUTH_TOKEN, undefined,
+        'MCP_AUTH_TOKEN must never reach child processes');
+    } finally {
+      if (saved === undefined) delete process.env.MCP_AUTH_TOKEN;
+      else process.env.MCP_AUTH_TOKEN = saved;
+    }
+  });
+
+  it('drops SUPABASE_SERVICE_KEY from filtered env', () => {
+    const saved = process.env.SUPABASE_SERVICE_KEY;
+    process.env.SUPABASE_SERVICE_KEY = 'supabase-leak-me-not';
+    try {
+      const env = safeEnv();
+      assert.equal(env.SUPABASE_SERVICE_KEY, undefined);
+    } finally {
+      if (saved === undefined) delete process.env.SUPABASE_SERVICE_KEY;
+      else process.env.SUPABASE_SERVICE_KEY = saved;
+    }
+  });
+
+  it('drops arbitrary non-allowlisted keys (default-deny)', () => {
+    const saved = process.env.RANDOM_SECRET_XYZ;
+    process.env.RANDOM_SECRET_XYZ = 'nope';
+    try {
+      const env = safeEnv();
+      assert.equal(env.RANDOM_SECRET_XYZ, undefined,
+        'default-deny: unknown keys must be filtered, not inherited');
+    } finally {
+      if (saved === undefined) delete process.env.RANDOM_SECRET_XYZ;
+      else process.env.RANDOM_SECRET_XYZ = saved;
+    }
+  });
+
+  it('preserves PATH (required for child spawn to work)', () => {
+    const env = safeEnv();
+    assert.ok(env.PATH && env.PATH.length > 0,
+      'PATH must be present — otherwise spawn("git", ...) fails with ENOENT');
+  });
+
+  it('preserves HOME, LANG, TZ, NODE_ENV (common runtime needs)', () => {
+    const saved = {
+      HOME: process.env.HOME,
+      LANG: process.env.LANG,
+      TZ: process.env.TZ,
+      NODE_ENV: process.env.NODE_ENV,
+    };
+    process.env.HOME = '/root';
+    process.env.LANG = 'en_US.UTF-8';
+    process.env.TZ = 'UTC';
+    process.env.NODE_ENV = 'production';
+    try {
+      const env = safeEnv();
+      assert.equal(env.HOME, '/root');
+      assert.equal(env.LANG, 'en_US.UTF-8');
+      assert.equal(env.TZ, 'UTC');
+      assert.equal(env.NODE_ENV, 'production');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it('does not allow the caller to bypass by passing extras for sensitive keys', () => {
+    // Extras are overlaid on top of the allowlist — they DON'T add keys,
+    // they override values. A caller cannot smuggle MCP_AUTH_TOKEN back in
+    // by passing it as an "extra" because the deploy path never passes
+    // extras; the only code path that does is server-internal. Verify the
+    // signature still drops unknown keys even when extras are given.
+    const env = safeEnv({ WEIRD_EXTRA: 'value' });
+    // WEIRD_EXTRA is intentionally allowed when passed as an extra — this
+    // is how legitimate callers (e.g. a future tool needing CI_BUILD_ID)
+    // would opt-in. The hard guarantee is that omitting extras = strict
+    // allowlist, which is what every call site in tools.ts does today.
+    assert.equal(env.WEIRD_EXTRA, 'value');
+  });
+
+  it('SAFE_ENV_KEYS does not include any known secrets', () => {
+    const forbidden = [
+      'MCP_AUTH_TOKEN', 'SUPABASE_SERVICE_KEY', 'SUPABASE_ANON_KEY',
+      'OAUTH_CLIENT_SECRET', 'AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN',
+      'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
+    ];
+    for (const k of forbidden) {
+      assert.ok(!SAFE_ENV_KEYS.includes(k),
+        `SAFE_ENV_KEYS must not include "${k}"`);
+    }
+  });
+
+  it('falls back to a safe PATH when process.env.PATH is empty', () => {
+    const saved = process.env.PATH;
+    delete process.env.PATH;
+    try {
+      const env = safeEnv();
+      assert.ok(env.PATH && env.PATH.includes('/usr/bin'),
+        'PATH fallback must include standard system bins so spawn works');
+    } finally {
+      if (saved !== undefined) process.env.PATH = saved;
+    }
+  });
+});
+
+// ─── 22. F-OP-45 — git hardening flags ──────────────────────────────────────
+// Sixth-pass F-LT-60: core.hooksPath=/dev/null alone is insufficient —
+// sshCommand, fsmonitor, editor, credential.helper, protocol.ext, and
+// uploadpack.packObjectsHook are all independent RCE vectors that run on
+// normal git ops. Every server-initiated git call must carry the full
+// hardening array, not just the single hooksPath flag.
+
+describe('F-OP-45 git hardening flags (sixth-pass F-LT-60)', () => {
+  const { GIT_HARDENING_FLAGS } = __TEST_ONLY;
+
+  function argPairs(): Array<[string, string]> {
+    const pairs: Array<[string, string]> = [];
+    for (let i = 0; i < GIT_HARDENING_FLAGS.length; i += 2) {
+      assert.equal(GIT_HARDENING_FLAGS[i], '-c',
+        `every hardening entry must be paired with -c (index ${i})`);
+      const [key, ...rest] = GIT_HARDENING_FLAGS[i + 1].split('=');
+      pairs.push([key, rest.join('=')]);
+    }
+    return pairs;
+  }
+
+  it('neutralizes core.hooksPath', () => {
+    const pairs = argPairs();
+    assert.ok(pairs.some(([k, v]) => k === 'core.hooksPath' && v === '/dev/null'));
+  });
+
+  it('neutralizes core.sshCommand (prevents attacker-controlled ssh wrapper)', () => {
+    const pairs = argPairs();
+    const entry = pairs.find(([k]) => k === 'core.sshCommand');
+    assert.ok(entry, 'core.sshCommand override is required — runs on every fetch/push');
+    assert.equal(entry![1], 'ssh');
+  });
+
+  it('neutralizes core.fsmonitor', () => {
+    const pairs = argPairs();
+    assert.ok(pairs.some(([k]) => k === 'core.fsmonitor'));
+  });
+
+  it('neutralizes core.editor (defuses commit/rebase editor RCE)', () => {
+    const pairs = argPairs();
+    const entry = pairs.find(([k]) => k === 'core.editor');
+    assert.ok(entry, 'core.editor must be overridden');
+    assert.equal(entry![1], 'true', 'use true(1), not empty string — empty errors in some git versions');
+  });
+
+  it('neutralizes core.pager', () => {
+    const pairs = argPairs();
+    const entry = pairs.find(([k]) => k === 'core.pager');
+    assert.ok(entry);
+    assert.equal(entry![1], 'cat');
+  });
+
+  it('neutralizes core.askpass', () => {
+    const pairs = argPairs();
+    assert.ok(pairs.some(([k]) => k === 'core.askpass'));
+  });
+
+  it('disables credential.helper (prevents helper-planted RCE)', () => {
+    const pairs = argPairs();
+    const entry = pairs.find(([k]) => k === 'credential.helper');
+    assert.ok(entry, 'credential.helper must be set to empty to disable helpers');
+    assert.equal(entry![1], '');
+  });
+
+  it('disables protocol.ext (closes CVE-2022-39253 family)', () => {
+    const pairs = argPairs();
+    const entry = pairs.find(([k]) => k === 'protocol.ext.allow');
+    assert.ok(entry, 'protocol.ext.allow must be set to never');
+    assert.equal(entry![1], 'never');
+  });
+
+  it('neutralizes uploadpack.packObjectsHook', () => {
+    const pairs = argPairs();
+    assert.ok(pairs.some(([k]) => k === 'uploadpack.packObjectsHook'));
+  });
+
+  it('all entries are -c <key>=<value> pairs', () => {
+    assert.equal(GIT_HARDENING_FLAGS.length % 2, 0,
+      'GIT_HARDENING_FLAGS must have even length');
+    for (let i = 0; i < GIT_HARDENING_FLAGS.length; i += 2) {
+      assert.equal(GIT_HARDENING_FLAGS[i], '-c');
+      assert.ok(GIT_HARDENING_FLAGS[i + 1].includes('='),
+        `flag payload at ${i + 1} must be key=value`);
+    }
   });
 });

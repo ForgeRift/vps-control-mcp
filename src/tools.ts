@@ -6,15 +6,113 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { CONFIG, ALLOWED_READ_DIRS } from './config.js';
 
-const exec = promisify(execFile);
+// ─── Child-process env allowlist (F-OP-44 / sixth-pass F-LT-55) ──────────────
+// Every spawn/exec in this module inherits env from safeEnv() — never
+// process.env directly. Anything not on this list is dropped so child
+// processes cannot read MCP_AUTH_TOKEN, SUPABASE_SERVICE_KEY,
+// OAUTH_CLIENT_SECRET, etc. and exfil them through tool output
+// (e.g. `node -e 'console.log(process.env)'` over an allowlisted binary).
+//
+// Keep this list tight. Adding a key here is equivalent to saying "it's OK
+// for any shelled-out process — including attacker-controlled ones — to
+// read this value." Do NOT add secrets here.
+const SAFE_ENV_KEYS: ReadonlyArray<string> = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TERM',
+  'SHELL',
+  'PWD',
+  'TMPDIR',
+  'NODE_ENV',
+  'NO_COLOR',
+  'FORCE_COLOR',
+];
+
+function safeEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const filtered: NodeJS.ProcessEnv = {};
+  for (const k of SAFE_ENV_KEYS) {
+    const v = process.env[k];
+    if (v !== undefined) filtered[k] = v;
+  }
+  // PATH fallback — without this, spawn fails with ENOENT on fresh systems
+  // or if the MCP was started from a shell with an empty PATH (systemd).
+  if (!filtered.PATH) {
+    filtered.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+  }
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) filtered[k] = v;
+    }
+  }
+  return filtered;
+}
+
+const execFileP = promisify(execFile);
+type ExecOpts = { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv };
+async function exec(
+  cmd: string,
+  args: string[],
+  opts: ExecOpts = {},
+): Promise<{ stdout: string; stderr: string }> {
+  // Always merge the caller's env (if any) on top of the allowlist, never
+  // the other way around — a caller must not be able to bypass the filter
+  // by omitting `env` and inheriting process.env.
+  const merged = { ...opts, env: safeEnv(opts.env) };
+  const res = await execFileP(cmd, args, merged);
+  // With no `encoding` option, promisified execFile returns strings.
+  return {
+    stdout: String(res.stdout ?? ''),
+    stderr: String(res.stderr ?? ''),
+  };
+}
+
+// ─── Git hardening flags (F-OP-45 / sixth-pass F-LT-60) ─────────────────────
+// The repo's own .git/config is attacker-writable if any RCE primitive fires
+// (even transiently), and the dangerous keys run commands during normal git
+// ops — not just hooks. hooksPath alone is insufficient.
+//
+// These -c overrides are server-controlled, so they beat any value stored
+// in the repo's config file. Applied to every server-initiated git call.
+//
+// Historical RCE vectors closed here:
+//   core.sshCommand=X       → X runs on fetch/push
+//   core.editor=X           → X runs on commit/rebase/pull with conflicts
+//   core.fsmonitor=X        → X runs on any status/diff
+//   core.pager=X            → X runs for every output-paging op
+//   core.askpass=X          → X runs when credentials are needed
+//   credential.helper=X     → X runs on any auth
+//   protocol.ext.allow=any  → ext::sh -c … URLs run shell (CVE-2022-39253 family)
+//   uploadpack.packObjectsHook=X → X runs on clone/fetch
+//
+// true(1) / cat(1) are neutral no-ops on POSIX; we use them to defuse editor
+// and pager rather than empty strings (some git versions error on empty).
+const GIT_HARDENING_FLAGS: ReadonlyArray<string> = [
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.editor=true',
+  '-c', 'core.pager=cat',
+  '-c', 'core.askpass=true',
+  '-c', 'core.sshCommand=ssh',
+  '-c', 'credential.helper=',
+  '-c', 'protocol.ext.allow=never',
+  '-c', 'protocol.file.allow=user',
+  '-c', 'uploadpack.packObjectsHook=',
+];
+
 function runCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const cb = (err: Error | null, stdout: string, stderr: string) => {
       if (err) { reject(err); return; }
       resolve({ stdout: stdout || '', stderr: stderr || '' });
     };
-    if (cwd) { execFile(cmd, args, { cwd }, cb); }
-    else      { execFile(cmd, args, cb); }
+    const opts = { env: safeEnv(), ...(cwd ? { cwd } : {}) };
+    execFile(cmd, args, opts, cb);
   });
 }
 
@@ -204,7 +302,10 @@ function startBackgroundJob(command: string): string {
 
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
-  const child = spawn(cmd, args, { detached: false });
+  // F-OP-44: filtered env — no MCP_AUTH_TOKEN / SUPABASE_SERVICE_KEY leak
+  // into background commands (these are user-approved commands, any of which
+  // could echo env to the log stream).
+  const child = spawn(cmd, args, { detached: false, env: safeEnv() });
 
   // Hard timeout: SIGTERM first, SIGKILL 5s later if it didn't die.
   let killed = false;
@@ -778,10 +879,21 @@ const validateArgPath: ArgValidator = (args) => {
 // F-OP-34: dedicated validator for `sort`. Reject -o/--output/--output=... because
 // sort with -o is a file-write primitive (writes sorted output to FILE). Read-only
 // sort invocations still fall through to validateArgPath for path containment.
+//
+// F-OP-38: ALSO reject the POSIX glued short-option form `-oFILE` (single argv
+// element, no space). GNU sort accepts `-o/root/.ssh/authorized_keys` as-is, and
+// validateArgPath skips any arg starting with `-`, so the glued form fell through
+// both filters pre-fix → arbitrary root file-write via allowlisted `sort`.
 const validateSortArgs: ArgValidator = (args) => {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '-o' || a === '--output' || a.startsWith('--output=')) {
+    if (
+      a === '-o' ||
+      a === '--output' ||
+      a.startsWith('--output=') ||
+      a.startsWith('--output-') ||          // defense in depth: any --output-XYZ flag
+      (a.startsWith('-o') && a.length > 2)  // F-OP-38: -oFILE glued short form
+    ) {
       return 'sort -o/--output (file write) is prohibited — this MCP is read-only.';
     }
   }
@@ -1256,13 +1368,15 @@ async function searchFile(
 }
 
 async function gitStatus(): Promise<string> {
-  const { stdout } = await exec('git', ['-C', CONFIG.APP_DIR, 'status']);
+  // F-OP-45: GIT_HARDENING_FLAGS even on read-only ops — fsmonitor / pager run on status.
+  const { stdout } = await exec('git', ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'status']);
   return stdout.trim();
 }
 
 async function gitLog(count: number): Promise<string> {
   const n = Math.min(Math.max(1, count), 20);
-  const { stdout } = await exec('git', ['-C', CONFIG.APP_DIR, 'log', '--oneline', `-${n}`]);
+  // F-OP-45: pager runs on log output — defuse it.
+  const { stdout } = await exec('git', ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'log', '--oneline', `-${n}`]);
   return stdout.trim();
 }
 
@@ -1279,11 +1393,13 @@ async function gitPull(dryRun: boolean, _directory?: string): Promise<string> {
       'Call with dry_run=false to execute.',
     ].join('\n');
   }
-  // F-NEW-5: core.hooksPath=/dev/null prevents execution of any repo hooks
-  // (post-merge, post-checkout, etc.) that an attacker could plant in the repo.
+  // F-OP-45 (sixth-pass): GIT_HARDENING_FLAGS — hooksPath alone is insufficient;
+  // sshCommand, fsmonitor, editor, credential.helper, protocol.ext and
+  // uploadpack.packObjectsHook are all independent RCE vectors and all ran
+  // during fetch/pull before this change.
   const { stdout, stderr } = await exec('git', [
     '-C', dir,
-    '-c', 'core.hooksPath=/dev/null',
+    ...GIT_HARDENING_FLAGS,
     'pull', 'origin', 'main',
   ]);
   return [stdout, stderr].filter(Boolean).join('\n').trim();
@@ -1302,7 +1418,14 @@ async function gitPush(dryRun: boolean, description: string): Promise<string> {
   if (!description || description.trim().length < 5) {
     throw new Error('description is required (min 5 chars) when dry_run=false. Describe what is being pushed.');
   }
-  const { stdout, stderr } = await exec('git', ['-C', CONFIG.APP_DIR, 'push', 'origin', 'main']);
+  // F-OP-45 + sixth-pass F-LT-54: GIT_HARDENING_FLAGS on push too — pre-push
+  // hooks, credential.helper, sshCommand all run during push. The prior fix
+  // only hardened pull; push was missed.
+  const { stdout, stderr } = await exec('git', [
+    '-C', CONFIG.APP_DIR,
+    ...GIT_HARDENING_FLAGS,
+    'push', 'origin', 'main',
+  ]);
   return [stdout, stderr].filter(Boolean).join('\n').trim();
 }
 
@@ -1433,7 +1556,10 @@ async function deploySharpEdge(dryRun: boolean, description: string): Promise<st
   const apiServerDir = path.join(CONFIG.APP_DIR, 'artifacts', 'api-server');
 
   const steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }> = [
-    { label: 'git pull origin main', cmd: 'git',  args: ['-C', CONFIG.APP_DIR, 'pull', 'origin', 'main'] },
+    // F-OP-45 / sixth-pass F-LT-52: deploy pull needs the same hardening as
+    // the user-facing gitPull tool — otherwise an attacker who plants hooks
+    // or a hostile core.sshCommand in the tracked repo gets RCE on next deploy.
+    { label: 'git pull origin main', cmd: 'git',  args: ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'] },
     { label: 'pnpm install',         cmd: 'pnpm', args: ['install'],     cwd: CONFIG.APP_DIR            },
     { label: 'node build.mjs',       cmd: 'node', args: ['build.mjs'],   cwd: apiServerDir              },
     { label: 'pm2 restart all',      cmd: 'pm2',  args: ['restart', 'all']                              },
@@ -1478,7 +1604,8 @@ async function deployVpsMcp(dryRun: boolean, description: string): Promise<strin
   const VPS_MCP_DIR = '/root/vps-control-mcp';
 
   const steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }> = [
-    { label: 'git pull origin main', cmd: 'git', args: ['-C', VPS_MCP_DIR, 'pull', 'origin', 'main'] },
+    // F-OP-45 / sixth-pass F-LT-52: hardened pull on deploy.
+    { label: 'git pull origin main', cmd: 'git', args: ['-C', VPS_MCP_DIR, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'] },
     { label: 'npm install --include=dev', cmd: 'npm', args: ['install', '--include=dev'], cwd: VPS_MCP_DIR },
     { label: 'npm run build',        cmd: 'npm', args: ['run', 'build'],  cwd: VPS_MCP_DIR            },
     { label: 'pm2 restart vps-mcp', cmd: 'pm2', args: ['restart', 'vps-mcp']                         },
@@ -1853,4 +1980,7 @@ export const __TEST_ONLY = {
   SENSITIVE_FILE_PATTERNS,
   CATASTROPHIC_PATTERN_SHAPES,
   POSITIVE_ALLOWLIST,
+  safeEnv,
+  SAFE_ENV_KEYS,
+  GIT_HARDENING_FLAGS,
 };

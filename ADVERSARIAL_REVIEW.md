@@ -254,3 +254,48 @@ Four new findings (3 CRITICAL, 1 HIGH) against v1.7.0. All closed in v1.7.1.
 | F-OP-34 | CRITICAL | `validateSortArgs` / `validateUniqArgs` block file-write primitives |
 | F-OP-35 | CRITICAL | PKCE mandatory; per-flow access tokens decouple from MCP_AUTH_TOKEN |
 | F-OP-36 | HIGH | Per-IP rate limit + Supabase circuit breaker |
+
+
+---
+
+# Sixth Pass — 2026-04-18 (S53 review → S53 close)
+
+Two independent Opus reviews against v1.7.1 surfaced four CRITICAL/HIGH
+items in the first-party code path plus a cluster of deploy-path
+hardening gaps. Selected for v1.8.0:
+
+* `F-OP-37` XFF spoofing (CRITICAL)
+* `F-OP-38` `sort -oFILE` glued-short-option bypass (CRITICAL)
+* `F-OP-44` Child-process env leaks `MCP_AUTH_TOKEN` / `SUPABASE_SERVICE_KEY` (HIGH)
+* `F-OP-45` `git -c` hardening incomplete (MEDIUM) + deploy-path extension
+
+Meta: test canary planted and removed — `npm test` genuinely exits non-zero on a single `assert.fail()`. The 299+-test green count is real, not silent-empty.
+
+### F-OP-37 — CRITICAL — X-Forwarded-For spoofing defeats per-IP rate limiter
+**Attack vector:** Express default `trust proxy = false` so `req.ip` was the socket remote (loopback from nginx). nginx config appended to `X-Forwarded-For` with `$proxy_add_x_forwarded_for` — client-controlled. Any caller could forge a fresh IP per request, turning the F-OP-36 per-IP limiter into zero effective ceiling.
+**Fix:** `app.set('trust proxy', 'loopback')` so Express trusts only localhost proxies and returns the first client-facing `X-Forwarded-For` entry via `req.ip`. Nginx site config switched to `proxy_set_header X-Forwarded-For $remote_addr` (overwrite, not append). Dedicated `callerIp(req)` helper reads ONLY `req.ip` — the raw header is never read.
+**Status:** FIXED (S53)
+
+### F-OP-38 — CRITICAL — `sort` glued short-option `-oFILE` bypasses F-OP-34
+**Attack vector:** `validateSortArgs` checked for `-o`, `--output=`, `--output`, but NOT the glued short-option form `-oFILE` that GNU sort accepts. `sort -o/tmp/pwn /etc/passwd` writes arbitrary files as the MCP process.
+**Fix:** Regex extended to catch `^-o./` and `^--output-` defence-in-depth patterns. Tests cover glued form, prefix variant, and the pre-existing bare/`=` forms.
+**Status:** FIXED (S53)
+
+### F-OP-44 — HIGH — Child processes inherit `MCP_AUTH_TOKEN` / `SUPABASE_SERVICE_KEY`
+**Attack vector:** Every `spawn`/`execFile` in `tools.ts` inherited `process.env` unchanged. Any allowlisted binary that can echo env (`node -e 'console.log(process.env)'` via user-uploaded `.js`, `jq -n env` if jq ever gains `-n`, etc.) returns `MCP_AUTH_TOKEN`, `SUPABASE_SERVICE_KEY`, `OAUTH_CLIENT_SECRET` in tool output. MCP token compromise = full lateral movement.
+**Fix:** Centralised `safeEnv()` helper with `SAFE_ENV_KEYS` positive-allowlist (PATH, HOME, USER, LANG, LC_*, TZ, TERM, SHELL, PWD, TMPDIR, NODE_ENV, NO_COLOR, FORCE_COLOR). The `exec`/`runCmd`/`spawn` wrappers all pass `env: safeEnv()` by default; caller extras are overlaid on top rather than able to replace the allowlist. PATH fallback ensures spawn works even from a shell with PATH unset.
+**Status:** FIXED (S53)
+
+### F-OP-45 — MEDIUM — `git -c core.hooksPath=/dev/null` alone is insufficient
+**Attack vector:** F-NEW-5 set `core.hooksPath=/dev/null` but left other independent RCE vectors reachable: `core.sshCommand`, `core.editor`, `core.fsmonitor`, `core.pager`, `core.askpass`, `credential.helper`, `protocol.ext.allow` (CVE-2022-39253 family), `uploadpack.packObjectsHook`. Each runs during normal git ops — `fetch`, `push`, `status`, `log` — if present in the repo's writeable `.git/config`.
+**Fix:** Single `GIT_HARDENING_FLAGS` constant applied to every server-initiated git call — `gitStatus`, `gitLog`, `gitPull`, `gitPush`, and both deploy-path pulls (`deploySharpEdge`, `deployVpsMcp`). Eleven `-c key=value` overrides; regression tests pin every entry.
+**Status:** FIXED (S53)
+
+## v1.8.0 Fix Summary
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| F-OP-37 | CRITICAL | Express trust-proxy=loopback + nginx overwrite XFF |
+| F-OP-38 | CRITICAL | `validateSortArgs` catches glued `-oFILE` form |
+| F-OP-44 | HIGH | Central `safeEnv()` positive-allowlist — all spawns filtered |
+| F-OP-45 | MEDIUM | `GIT_HARDENING_FLAGS` applied to every server-initiated git call + deploy paths |
