@@ -143,12 +143,27 @@ function createMcpServer(): Server {
 const app = express();
 
 // --- CORS (browser-based MCP clients need this) ------------------------------
-app.use((_req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+// F-OP-14: Reflect origin only if it is in ALLOWED_REDIRECT_HOSTS — eliminates the
+// "any origin can make authenticated requests" gap from CORS: *.
+// Non-allowlisted origins get no Access-Control-Allow-Origin header, so browsers
+// block the preflight and the authenticated request never reaches the server.
+// Note: ALLOWED_REDIRECT_HOSTS is defined further below in module scope; the closure
+// captures the variable reference, which is fully initialised before any request arrives.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      if (ALLOWED_REDIRECT_HOSTS.has(parsed.hostname.toLowerCase())) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+      }
+    } catch { /* malformed Origin header — omit CORS header entirely */ }
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version');
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
-  if (_req.method === 'OPTIONS') { res.status(204).end(); return; }
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
   next();
 });
 
@@ -426,15 +441,23 @@ app.post('/token', (req, res) => {
   }
 
   // --- Authorization code grant (default) ---
-  if (!code || !authCodes.has(code)) {
+  // F-OP-11: Atomic get-and-delete — Map.delete() returns false if the key was already absent.
+  // Two parallel requests with the same code both pass a has() check but only one wins
+  // the delete(); the loser gets invalid_grant. Prevents refresh-token duplication.
+  const codeEntry = code ? authCodes.get(code) : undefined;
+  if (!code || !codeEntry) {
     res.status(400).json({ error: 'invalid_grant' });
     return;
   }
+  if (!authCodes.delete(code)) {
+    // Lost the race — another concurrent request already consumed this code.
+    res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code already used.' });
+    return;
+  }
 
-  // F-NEW-6: PKCE verification (S256).
+  // F-NEW-6: PKCE verification (S256). Code is already consumed; PKCE failure = fatal, no retry.
   // If a code_challenge was registered at /authorize, the client MUST present
   // a code_verifier whose SHA-256 matches. Missing or wrong verifier = invalid_grant.
-  const codeEntry = authCodes.get(code)!;
   if (codeEntry.codeChallenge) {
     const verifier = (req.body as Record<string, string>).code_verifier ?? '';
     if (!verifier) {
@@ -447,8 +470,6 @@ app.post('/token', (req, res) => {
       return;
     }
   }
-
-  authCodes.delete(code);
 
   const accessToken = process.env.MCP_AUTH_TOKEN!;
   // F-VM-6: crypto-random refresh token

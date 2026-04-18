@@ -364,6 +364,13 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   /\/aws\/(config|credentials)/i,    // AWS CLI config/credentials outside ~/.aws/
   /\.gcloud\//,                      // GCP credentials
   /\.azure\//,                       // Azure credentials
+  // F-OP-16: shell/tool config files that commonly contain exported secrets
+  /\.envrc(?![a-zA-Z0-9])/i,          // direnv config (export API_KEY=...)
+  /\.npmrc(?![a-zA-Z0-9])/i,          // npm auth tokens (//registry.npmjs.org/:_authToken=...)
+  /\.yarnrc(?![a-zA-Z0-9])/i,         // yarn auth tokens
+  /\.bashrc(?![a-zA-Z0-9])/i,         // bash shell config (may export secrets)
+  /\.zshrc(?![a-zA-Z0-9])/i,          // zsh shell config (may export secrets)
+  /\.profile(?![a-zA-Z0-9])/i,        // POSIX shell profile (may export secrets)
 ];
 
 function validatePath(filePath: string): string {
@@ -658,7 +665,6 @@ function validateCommand(command: string): void {
   if (/[^\x00-\x7F]/.test(command)) {
     throw new Error(
       `⛔ BLOCKED [unicode]: Non-ASCII characters are not permitted in commands.\n` +
-      `Command: ${command}\n` +
       `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
       `Attempting to circumvent security controls violates the Terms of Service.`
     );
@@ -668,7 +674,6 @@ function validateCommand(command: string): void {
   if (/[\r\n]/.test(command)) {
     throw new Error(
       `⛔ BLOCKED [newline-inject]: Newline or carriage-return characters are not permitted in commands.\n` +
-      `Command: ${JSON.stringify(command)}\n` +
       `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
       `Attempting to circumvent security controls violates the Terms of Service.`
     );
@@ -679,7 +684,6 @@ function validateCommand(command: string): void {
     if (pattern.test(command)) {
       throw new Error(
         `⛔ BLOCKED [${category}]: ${reason}\n` +
-        `Command: ${command}\n` +
         `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
         `Attempting to circumvent security controls violates the Terms of Service.`
       );
@@ -993,7 +997,6 @@ function validateAgainstAllowlist(command: string): void {
     throw new Error(
       `⛔ BLOCKED [not-allowlisted]: Path-qualified binary names are not permitted.\n` +
       `Use the bare binary name (e.g., "cat" not "/bin/cat").\n` +
-      `Command: ${command}\n` +
       `This restriction cannot be overridden.\n` +
       `Attempting to circumvent security controls violates the Terms of Service.`
     );
@@ -1004,7 +1007,6 @@ function validateAgainstAllowlist(command: string): void {
     const allowed = Object.keys(POSITIVE_ALLOWLIST).sort().join(', ');
     throw new Error(
       `⛔ BLOCKED [not-allowlisted]: "${rawBinary}" is not on the approved command list.\n` +
-      `Command: ${command}\n` +
       `Approved binaries: ${allowed}\n` +
       `This restriction cannot be overridden. Run unlisted commands directly on the server via SSH.\n` +
       `Attempting to circumvent security controls violates the Terms of Service.`
@@ -1015,7 +1017,6 @@ function validateAgainstAllowlist(command: string): void {
   if (argError) {
     throw new Error(
       `⛔ BLOCKED [invalid-args]: ${argError}\n` +
-      `Command: ${command}\n` +
       `This restriction cannot be overridden.\n` +
       `Attempting to circumvent security controls violates the Terms of Service.`
     );
