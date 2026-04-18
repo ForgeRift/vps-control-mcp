@@ -93,7 +93,11 @@ function persistJob(job: DeployJob): void {
       for (const e of entries.slice(-DEPLOY_JOBS_MAX)) pruned[e.id] = store[e.id];
       store = pruned;
     }
-    fs.writeFileSync(JOBS_FILE, JSON.stringify(store, null, 2), 'utf8');
+    // F-OP-32: atomic write — write to tmp then rename so concurrent deploys cannot
+    // corrupt JOBS_FILE with a partial write. fs.renameSync is atomic on Linux (POSIX).
+    const tmp = `${JOBS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
+    fs.renameSync(tmp, JOBS_FILE);
   } catch { /* fail-silent -- persistence is best-effort */ }
 }
 
@@ -726,12 +730,40 @@ function checkAmberWarnings(command: string): string | null {
 
 type ArgValidator = (args: string[]) => string | null;
 
-// Rejects any arg that matches SENSITIVE_FILE_PATTERNS (path-like args).
+// Rejects any arg that matches SENSITIVE_FILE_PATTERNS (name-pattern check only).
+// Used where ALLOWED_READ_DIRS enforcement is inappropriate (e.g. flags/argv to non-readers).
 const rejectSensitiveArgs: ArgValidator = (args) => {
   for (const arg of args) {
     if (SENSITIVE_FILE_PATTERNS.some(p => p.test(arg))) {
       return `Argument "${arg}" matches a sensitive file pattern and is not permitted.`;
     }
+  }
+  return null;
+};
+
+// F-OP-20/21/24: Full validatePath() semantics applied to positional path args.
+// For absolute paths: realpath-resolve symlinks + ALLOWED_READ_DIRS allowlist + SENSITIVE_FILE_PATTERNS.
+// This closes the symlink-escape bypass (F-OP-20) and the sensitive-directory readable-via-reader
+// bypass (F-OP-21): sort /etc/passwd, cut /etc/group, cat /var/log/auth.log etc. are all blocked
+// because /etc and /var/log are outside ALLOWED_READ_DIRS ([APP_DIR, PM2_LOG_DIR]).
+// For relative paths/filenames: name-pattern check only (no absolute base to resolve against).
+// For flags (-x, --x): no check.
+const validateArgPath: ArgValidator = (args) => {
+  for (const arg of args) {
+    if (arg.startsWith('/')) {
+      // Absolute path: full security triple (symlink resolution + allowlist + patterns).
+      try {
+        validatePath(arg);
+      } catch (err) {
+        return (err as Error).message;
+      }
+    } else if (!arg.startsWith('-')) {
+      // Relative path or bare filename: check sensitive name patterns.
+      if (SENSITIVE_FILE_PATTERNS.some(p => p.test(arg))) {
+        return `Argument "${arg}" matches a sensitive file pattern and is not permitted.`;
+      }
+    }
+    // Flags (-x, --long): no path check.
   }
   return null;
 };
@@ -818,7 +850,9 @@ const validateNodeArgs: ArgValidator = (args) => {
       }
     }
     if (!a.startsWith('-')) {
-      const err = rejectSensitiveArgs([a]);
+      // F-OP-24: script path must be within ALLOWED_READ_DIRS — validateArgPath enforces
+      // the full path security triple (symlink + allowlist + patterns) for absolute paths.
+      const err = validateArgPath([a]);
       if (err) return err;
     }
   }
@@ -870,28 +904,38 @@ const validateSedArgs: ArgValidator = (args) => {
       }
     }
   }
-  return rejectSensitiveArgs(args);
+  // F-OP-20/21: validateArgPath for full path security triple on remaining args.
+  return validateArgPath(args);
 };
 
-// grep: block recursive flags that read all files including sensitive ones.
-// F-OP-4: grep -r/-R reads .env files even though filename would block cat.
+// grep: block recursive and PCRE flags.
+// F-OP-4: grep -r/-R reads all files including sensitive ones.
+// F-OP-27: grep -P/--perl-regexp enables PCRE ReDoS — unbounded CPU via catastrophic backtracking.
 // Route recursive search through search_file which enforces validatePath.
 //
 // Argument structure: grep [flags] <pattern> [file ...]
-// The <pattern> is a search string, NOT a file path — do NOT apply rejectSensitiveArgs to it.
-// Only file path arguments (after the first non-flag arg) need sensitive-path checking.
+// The <pattern> is a search string, NOT a file path — skip it for path checks.
+// File path arguments (after the first non-flag arg) go through validateArgPath (F-OP-20/21).
 const validateGrepArgs: ArgValidator = (args) => {
   let patternConsumed = false; // first non-flag arg is the search pattern, not a file
   for (const a of args) {
     if (a.startsWith('-')) {
+      // Recursive: reads arbitrary files
       if (a === '-r' || a === '-R' || a === '--recursive' || a === '-d') {
         return `grep flag "${a}" is not permitted — recursive grep reads all files including sensitive ones. Use the search_file tool for recursive search.`;
       }
-      // Catch combined short flags: -rh, -Rh, -lrn, etc.
+      // F-OP-27: PCRE via -P/--perl-regexp enables ReDoS with catastrophic patterns.
+      if (a === '-P' || a === '--perl-regexp') {
+        return `grep flag "${a}" (PCRE) is not permitted — PCRE patterns can cause catastrophic backtracking (ReDoS). Use BRE/ERE patterns instead.`;
+      }
+      // Catch combined short flags: -rh, -Rh, -Ph, -lrPn, etc.
       if (/^-[a-zA-Z]{2,}$/.test(a)) {
         for (const ch of a.slice(1)) {
           if (ch === 'r' || ch === 'R') {
             return `grep flag "-${ch}" (from combined "${a}") enables recursive search and is not permitted.`;
+          }
+          if (ch === 'P') {
+            return `grep flag "-P" (from combined "${a}") enables PCRE and is not permitted (ReDoS risk).`;
           }
         }
       }
@@ -900,8 +944,8 @@ const validateGrepArgs: ArgValidator = (args) => {
         patternConsumed = true;
         continue; // skip pattern arg — it's a search string, not a file path
       }
-      // File path args: check against sensitive file patterns
-      const err = rejectSensitiveArgs([a]);
+      // File path args: F-OP-20/21 — apply validateArgPath for full path security triple.
+      const err = validateArgPath([a]);
       if (err) return err;
     }
   }
@@ -911,6 +955,7 @@ const validateGrepArgs: ArgValidator = (args) => {
 // find: block -exec/-execdir/-ok (spawn child processes bypassing validation).
 // F-OP-3: also a RED pattern — this validator is defense-in-depth.
 // Block -fprint/-fprintf which write to attacker-chosen file paths.
+// F-OP-20/21: use validateArgPath for path args — blocks find /etc, find /var/lib etc.
 const validateFindArgs: ArgValidator = (args) => {
   const BLOCKED_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-delete']);
   for (const a of args) {
@@ -918,7 +963,7 @@ const validateFindArgs: ArgValidator = (args) => {
       return `find "${a}" is prohibited — it spawns child processes or writes to arbitrary paths, bypassing MCP command validation.`;
     }
   }
-  return rejectSensitiveArgs(args);
+  return validateArgPath(args);
 };
 
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }
@@ -938,7 +983,9 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── Process info (read-only) ──────────────────────────────────────────────
   // NOTE: 'ps' removed (F-OP-18) — ps auxe/ps -eo cmd,env dumps MCP_AUTH_TOKEN. Use get_pm2_status / get_system_health.
   'top':      { description: 'Process monitor (batch)',  argValidator: allowFlags('-b', '-n', '-1', '-d', '-u', '-p') },
-  'pgrep':    { description: 'Find process by name',     argValidator: allowFlags('-l', '-a', '-x', '-n', '-o', '-u', '-f') },
+  // F-OP-29: -a (show full cmdline) and -f (match against cmdline) removed.
+  // Both leak process command lines which may contain --password=, --key=, etc.
+  'pgrep':    { description: 'Find process by name',     argValidator: allowFlags('-l', '-x', '-n', '-o', '-u') },
   'pidof':    { description: 'Find PID by name',         argValidator: rejectSensitiveArgs },
   'lsof':     { description: 'List open files',          argValidator: allowFlags('-i', '-p', '-u', '-n', '-P', '-t', '-c', '-a', '-l', '-s') },
 
@@ -946,28 +993,32 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'ss':       { description: 'Socket statistics',        argValidator: allowFlags('-t', '-u', '-l', '-p', '-n', '-a', '-4', '-6', '-r', '-e', '-o', '-s', '-i') },
   'netstat':  { description: 'Network statistics',       argValidator: allowFlags('-t', '-u', '-l', '-p', '-n', '-a', '-4', '-6', '-r', '-e', '-i', '-s') },
 
-  // ── File reading (restricted to non-sensitive paths) ──────────────────────
-  'cat':      { description: 'Read file',                argValidator: rejectSensitiveArgs },
-  'head':     { description: 'First N lines of file',    argValidator: rejectSensitiveArgs },
-  'tail':     { description: 'Last N lines / follow log',argValidator: rejectSensitiveArgs },
-  'wc':       { description: 'Word/line/byte count',     argValidator: rejectSensitiveArgs },
-  'ls':       { description: 'List directory',           argValidator: rejectSensitiveArgs },
-  'du':       { description: 'Disk usage per path',      argValidator: rejectSensitiveArgs },
-  'stat':     { description: 'File/dir metadata',        argValidator: rejectSensitiveArgs },
-  'file':     { description: 'Detect file type',         argValidator: rejectSensitiveArgs },
-  'diff':     { description: 'File comparison',          argValidator: rejectSensitiveArgs },
+  // ── File reading (restricted to ALLOWED_READ_DIRS) ────────────────────────
+  // F-OP-20/21: validateArgPath enforces the full path security triple (realpath symlink
+  // resolution + ALLOWED_READ_DIRS allowlist + SENSITIVE_FILE_PATTERNS) for absolute path
+  // args. This prevents: (a) symlink-escape via git-tracked symlinks, (b) reading
+  // /etc/passwd, /var/log/auth.log, /root/.bash_history etc. via non-cat readers.
+  'cat':      { description: 'Read file',                argValidator: validateArgPath },
+  'head':     { description: 'First N lines of file',    argValidator: validateArgPath },
+  'tail':     { description: 'Last N lines / follow log',argValidator: validateArgPath },
+  'wc':       { description: 'Word/line/byte count',     argValidator: validateArgPath },
+  'ls':       { description: 'List directory',           argValidator: validateArgPath },
+  'du':       { description: 'Disk usage per path',      argValidator: validateArgPath },
+  'stat':     { description: 'File/dir metadata',        argValidator: validateArgPath },
+  'file':     { description: 'Detect file type',         argValidator: validateArgPath },
+  'diff':     { description: 'File comparison',          argValidator: validateArgPath },
   'find':     { description: 'Find files',               argValidator: validateFindArgs },
 
   // ── Text processing ───────────────────────────────────────────────────────
   'grep':     { description: 'Text search (non-recursive)', argValidator: validateGrepArgs },
   // NOTE: 'awk' removed (F-OP-1) — awk system()/getline provides full root RCE. No safe subset.
   'sed':      { description: 'Stream editor (no -i, no e cmd)', argValidator: validateSedArgs },
-  'sort':     { description: 'Sort lines',               argValidator: rejectSensitiveArgs },
-  'uniq':     { description: 'Deduplicate lines',        argValidator: rejectSensitiveArgs },
-  'tr':       { description: 'Translate characters',     argValidator: rejectSensitiveArgs },
-  'cut':      { description: 'Cut fields',               argValidator: rejectSensitiveArgs },
-  'paste':    { description: 'Merge files/lines',        argValidator: rejectSensitiveArgs },
-  'jq':       { description: 'JSON processor',           argValidator: rejectSensitiveArgs },
+  'sort':     { description: 'Sort lines',               argValidator: validateArgPath },
+  'uniq':     { description: 'Deduplicate lines',        argValidator: validateArgPath },
+  'tr':       { description: 'Translate characters',     argValidator: validateArgPath },
+  'cut':      { description: 'Cut fields',               argValidator: validateArgPath },
+  'paste':    { description: 'Merge files/lines',        argValidator: validateArgPath },
+  'jq':       { description: 'JSON processor',           argValidator: validateArgPath },
 
   // ── PM2 (read-only — restart via structured tool) ────────────────────────
   'pm2':      { description: 'PM2 process manager',      argValidator: validatePm2Args },

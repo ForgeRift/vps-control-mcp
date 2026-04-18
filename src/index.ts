@@ -1,5 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
@@ -317,10 +319,44 @@ interface AuthCodeEntry {
   issuedAt:             number;
   codeChallenge?:       string; // S256 challenge (base64url-encoded SHA-256 of verifier)
   codeChallengeMethod?: string; // 'S256' only
+  timer:                ReturnType<typeof setTimeout>; // F-OP-25: stored so we can clearTimeout on any removal path
 }
+// F-OP-22: hard cap on authCodes Map to prevent unauth memory DoS.
+// /authorize is unauthenticated — an attacker can flood it with large code_challenge
+// values. Without a cap, each entry + 5-min timer accumulates unbounded until OOM.
+const AUTH_CODES_MAX = 1000;
 const authCodes = new Map<string, AuthCodeEntry>();
-const refreshTokens = new Map<string, { accessToken: string; issuedAt: number }>();
+
+interface RefreshTokenEntry {
+  accessToken: string;
+  issuedAt:    number;
+  timer:       ReturnType<typeof setTimeout>; // F-OP-25: clearTimeout on every removal path
+}
+const refreshTokens = new Map<string, RefreshTokenEntry>();
 const REFRESH_TOKENS_MAX = 500; // cap against crash-loop seeding unbounded timers
+
+// F-OP-22/25: helper — insert with FIFO eviction + clearTimeout on displaced entry.
+function insertAuthCode(code: string, entry: AuthCodeEntry): void {
+  if (authCodes.size >= AUTH_CODES_MAX) {
+    const oldest = authCodes.entries().next().value as [string, AuthCodeEntry] | undefined;
+    if (oldest) {
+      clearTimeout(oldest[1].timer);
+      authCodes.delete(oldest[0]);
+    }
+  }
+  authCodes.set(code, entry);
+}
+
+function insertRefreshToken(token: string, entry: RefreshTokenEntry): void {
+  if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
+    const oldest = refreshTokens.entries().next().value as [string, RefreshTokenEntry] | undefined;
+    if (oldest) {
+      clearTimeout(oldest[1].timer);
+      refreshTokens.delete(oldest[0]);
+    }
+  }
+  refreshTokens.set(token, entry);
+}
 
 const TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
 
@@ -376,28 +412,44 @@ app.get('/authorize', (req, res) => {
     return;
   }
 
+  // F-OP-22: length caps to bound per-request memory contribution.
+  // RFC 7636 max for S256 code_challenge = 128 chars (base64url of 96-byte verifier).
+  if (redirect_uri.length > 1024) { res.status(400).send('redirect_uri too long (max 1024).'); return; }
+  if (state.length > 256)         { res.status(400).send('state too long (max 256).'); return; }
+  if (code_challenge.length > 128){ res.status(400).send('code_challenge too long (max 128).'); return; }
+
   if (!isRedirectAllowed(redirect_uri)) {
     res.status(403).send('redirect_uri host not in allow-list. Set ALLOWED_REDIRECT_HOSTS to add custom origins.');
     return;
   }
 
-  // F-NEW-6: PKCE enforcement.
-  // If client sends a challenge, only S256 is accepted.
-  // Rejecting 'plain' method closes the downgrade attack (plain = no security gain).
-  if (code_challenge_method && code_challenge_method !== 'S256') {
-    res.status(400).send('Unsupported code_challenge_method. Use S256.');
-    return;
+  // F-NEW-6 + F-OP-26: PKCE enforcement.
+  // If code_challenge_method is present, S256 is the only accepted method.
+  // If S256 is signalled, a non-empty, correctly-formatted challenge is REQUIRED —
+  // an empty challenge silently disables PKCE, enabling full token theft via code leak.
+  if (code_challenge_method) {
+    if (code_challenge_method !== 'S256') {
+      res.status(400).send('Unsupported code_challenge_method. Use S256.');
+      return;
+    }
+    // F-OP-26: enforce non-empty + valid charset (RFC 7636 §4.2: [A-Za-z0-9._~-]{43,128})
+    if (!code_challenge || !/^[A-Za-z0-9_\-.~]{43,128}$/.test(code_challenge)) {
+      res.status(400).send('code_challenge required when code_challenge_method=S256 (43–128 URL-safe chars).');
+      return;
+    }
   }
 
   // F-VM-6: crypto-random, not Math.random(). 32 bytes = 256 bits of entropy.
   const code = crypto.randomBytes(32).toString('base64url');
-  const entry: AuthCodeEntry = { issuedAt: Date.now() };
-  if (code_challenge) {
+  // F-OP-22/25: schedule expiry timer and store the handle so FIFO eviction can clearTimeout.
+  const timer = setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
+  const entry: AuthCodeEntry = { issuedAt: Date.now(), timer };
+  if (code_challenge && code_challenge_method === 'S256') {
     entry.codeChallenge = code_challenge;
     entry.codeChallengeMethod = 'S256';
   }
-  authCodes.set(code, entry);
-  setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
+  // F-OP-22: use helper — FIFO-evicts oldest entry (with clearTimeout) when at cap.
+  insertAuthCode(code, entry);
 
   const url = new URL(redirect_uri);
   url.searchParams.set('code', code);
@@ -419,17 +471,17 @@ app.post('/token', (req, res) => {
 
     // Rotate: invalidate old refresh token, issue new pair
     const entry = refreshTokens.get(refresh_token)!;
+    // F-OP-25: clearTimeout on explicit delete so the expiry timer doesn't leak.
+    clearTimeout(entry.timer);
     refreshTokens.delete(refresh_token);
 
     // F-VM-6: crypto-random refresh tokens
     const newRefresh = crypto.randomBytes(32).toString('base64url');
-    if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
-      const oldest = refreshTokens.keys().next().value;
-      if (oldest) refreshTokens.delete(oldest);
-    }
-    refreshTokens.set(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now() });
     // setTimeout max is ~24.8 days (2^31-1 ms). Use 24 days; tokens also checked at use time.
-    setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
+    // F-OP-25: store handle so FIFO eviction and early rotation can clearTimeout.
+    const refreshTimer = setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
+    // F-OP-22/25: use helper — FIFO-evicts oldest (with clearTimeout) when at cap.
+    insertRefreshToken(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now(), timer: refreshTimer });
 
     res.json({
       access_token:  entry.accessToken,
@@ -454,6 +506,9 @@ app.post('/token', (req, res) => {
     res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code already used.' });
     return;
   }
+  // F-OP-25: cancel the 5-min expiry timer now that the code is consumed — prevents
+  // the stale delete from firing and avoids the timer leaking in the event loop.
+  clearTimeout(codeEntry.timer);
 
   // F-NEW-6: PKCE verification (S256). Code is already consumed; PKCE failure = fatal, no retry.
   // If a code_challenge was registered at /authorize, the client MUST present
@@ -473,13 +528,11 @@ app.post('/token', (req, res) => {
 
   const accessToken = process.env.MCP_AUTH_TOKEN!;
   // F-VM-6: crypto-random refresh token
+  // F-OP-25: store timer handle so FIFO eviction and early rotation can clearTimeout.
   const newRefresh = crypto.randomBytes(32).toString('base64url');
-  if (refreshTokens.size >= REFRESH_TOKENS_MAX) {
-    const oldest = refreshTokens.keys().next().value;
-    if (oldest) refreshTokens.delete(oldest);
-  }
-  refreshTokens.set(newRefresh, { accessToken, issuedAt: Date.now() });
-  setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
+  const newRefreshTimer = setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
+  // F-OP-22/25: use helper — FIFO-evicts oldest (with clearTimeout) when at cap.
+  insertRefreshToken(newRefresh, { accessToken, issuedAt: Date.now(), timer: newRefreshTimer });
 
   res.json({
     access_token:  accessToken,
@@ -589,14 +642,23 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-const CURRENT_VERSION = '1.6.0';
+// F-OP-30: read version from package.json at startup — prior passes closed F-OP-15
+// but the hardcode was never actually removed. Fall back to a constant on parse failure.
+let CURRENT_VERSION = '1.7.0';
+try {
+  // dist/index.js → ../package.json (one level up from dist/)
+  const pkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+  if (pkg.version) CURRENT_VERSION = pkg.version;
+} catch { /* keep fallback constant */ }
 
 app.get('/health', async (req, res) => {
-  // F-NEW-15: unauthenticated callers get a minimal response only.
-  // Full diagnostics (session count, version, security config) require a valid token.
+  // F-NEW-15 + F-OP-31: unauthenticated callers get a minimal response only.
+  // uptime_s was removed — it leaks process restart cadence to unauth callers,
+  // which is useful for timing attacks and restart-loop detection.
   const authenticated = await validateAuth(req);
   if (!authenticated) {
-    res.json({ status: 'ok', uptime_s: Math.round(process.uptime()) });
+    res.json({ status: 'ok' });
     return;
   }
 
