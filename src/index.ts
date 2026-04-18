@@ -297,7 +297,13 @@ app.post('/register', (req, res) => {
 // redirect_uri is validated against an allow-list of known Cowork/Claude
 // domains. Self-hosted users can add custom origins via ALLOWED_REDIRECT_HOSTS.
 
-const authCodes = new Map<string, number>();
+// F-NEW-6: store PKCE challenge alongside auth code so /token can verify it.
+interface AuthCodeEntry {
+  issuedAt:             number;
+  codeChallenge?:       string; // S256 challenge (base64url-encoded SHA-256 of verifier)
+  codeChallengeMethod?: string; // 'S256' only
+}
+const authCodes = new Map<string, AuthCodeEntry>();
 const refreshTokens = new Map<string, { accessToken: string; issuedAt: number }>();
 const REFRESH_TOKENS_MAX = 500; // cap against crash-loop seeding unbounded timers
 
@@ -343,7 +349,12 @@ function isRedirectAllowed(uri: string): boolean {
 
 // Step 1: Cowork opens this in a browser — auto-redirect with code
 app.get('/authorize', (req, res) => {
-  const { redirect_uri = '', state = '' } = req.query as Record<string, string>;
+  const {
+    redirect_uri = '',
+    state = '',
+    code_challenge = '',
+    code_challenge_method = '',
+  } = req.query as Record<string, string>;
 
   if (!redirect_uri) {
     res.status(400).send('Missing redirect_uri');
@@ -355,9 +366,22 @@ app.get('/authorize', (req, res) => {
     return;
   }
 
+  // F-NEW-6: PKCE enforcement.
+  // If client sends a challenge, only S256 is accepted.
+  // Rejecting 'plain' method closes the downgrade attack (plain = no security gain).
+  if (code_challenge_method && code_challenge_method !== 'S256') {
+    res.status(400).send('Unsupported code_challenge_method. Use S256.');
+    return;
+  }
+
   // F-VM-6: crypto-random, not Math.random(). 32 bytes = 256 bits of entropy.
   const code = crypto.randomBytes(32).toString('base64url');
-  authCodes.set(code, Date.now());
+  const entry: AuthCodeEntry = { issuedAt: Date.now() };
+  if (code_challenge) {
+    entry.codeChallenge = code_challenge;
+    entry.codeChallengeMethod = 'S256';
+  }
+  authCodes.set(code, entry);
   setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
 
   const url = new URL(redirect_uri);
@@ -405,6 +429,23 @@ app.post('/token', (req, res) => {
   if (!code || !authCodes.has(code)) {
     res.status(400).json({ error: 'invalid_grant' });
     return;
+  }
+
+  // F-NEW-6: PKCE verification (S256).
+  // If a code_challenge was registered at /authorize, the client MUST present
+  // a code_verifier whose SHA-256 matches. Missing or wrong verifier = invalid_grant.
+  const codeEntry = authCodes.get(code)!;
+  if (codeEntry.codeChallenge) {
+    const verifier = (req.body as Record<string, string>).code_verifier ?? '';
+    if (!verifier) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required for PKCE flow.' });
+      return;
+    }
+    const computed = crypto.createHash('sha256').update(verifier).digest('base64url');
+    if (computed !== codeEntry.codeChallenge) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge.' });
+      return;
+    }
   }
 
   authCodes.delete(code);

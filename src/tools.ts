@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'child_process';
 import fs from 'fs';
+import readline from 'readline';
 import path from 'path';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
@@ -951,20 +952,54 @@ async function readFileSection(
 ): Promise<string> {
   const safePath = validatePath(filePath);
 
-  // Cap range
+  if (startLine < 1) throw new Error('start_line must be >= 1.');
+
+  // Cap range to MAX_FILE_LINES — prevents reading entire huge files (F-NEW-12).
+  // Streaming approach: reads line-by-line and stops at clampedEnd, so only the
+  // needed portion is buffered. The old readFileSync loaded the full file into
+  // memory which could OOM the process on large log files in ALLOWED_READ_DIRS.
   const clampedEnd = Math.min(endLine, startLine + CONFIG.MAX_FILE_LINES - 1);
+  const collected: string[] = [];
+  let totalLinesRead = 0;
 
-  const content = fs.readFileSync(safePath, 'utf8');
-  const lines = content.split('\n');
-  const totalLines = lines.length;
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(safePath, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let earlyClose = false;
 
-  if (startLine < 1 || startLine > totalLines) {
-    throw new Error(`start_line ${startLine} is out of range. File has ${totalLines} lines.`);
+    rl.on('line', (line) => {
+      totalLinesRead++;
+      if (totalLinesRead >= startLine && totalLinesRead <= clampedEnd) {
+        collected.push(line);
+      }
+      if (totalLinesRead > clampedEnd && !earlyClose) {
+        earlyClose = true;
+        rl.close();
+        stream.destroy();
+      }
+    });
+
+    rl.on('close', resolve);
+    // destroy() may emit an ERR_STREAM_DESTROYED — ignore it; normal close resolves above.
+    stream.on('error', (err) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ERR_STREAM_DESTROYED') { resolve(); return; }
+      reject(err);
+    });
+  });
+
+  if (startLine > totalLinesRead) {
+    throw new Error(`start_line ${startLine} is out of range. File has ${totalLinesRead} lines.`);
   }
 
-  const slice = lines.slice(startLine - 1, clampedEnd);
-  const header = `Lines ${startLine}–${Math.min(clampedEnd, totalLines)} of ${totalLines} total in ${path.basename(safePath)}:\n\n`;
-  const body = slice.map((l, i) => `${startLine + i}: ${l}`).join('\n');
+  const hitEOF = totalLinesRead <= clampedEnd;
+  const actualEnd = Math.min(clampedEnd, totalLinesRead);
+  const rangeDesc = hitEOF
+    ? `Lines ${startLine}–${actualEnd} of ${totalLinesRead} total`
+    : `Lines ${startLine}–${actualEnd} (file continues past line ${clampedEnd})`;
+
+  const header = `${rangeDesc} in ${path.basename(safePath)}:\n\n`;
+  const body = collected.map((l, i) => `${startLine + i}: ${l}`).join('\n');
 
   return truncate(header + body);
 }
