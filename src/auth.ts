@@ -49,6 +49,74 @@ const CACHE_TTL_NEGATIVE_MS = 30 * 60 * 1000; // 30 minutes — keep rejections 
 const CACHE_MAX_POSITIVE = 1000;
 const CACHE_MAX_NEGATIVE = 5000; // larger — absorbs flood of random tokens
 
+// ─── F-OP-35: OAuth session tokens ────────────────────────────────────────────
+// Per-OAuth-flow minted access tokens, bound to a specific authorization_code
+// exchange. Decouples OAuth access_token from the master MCP_AUTH_TOKEN so that
+// any future auth-flow flaw can never leak the root token.
+// Session tokens are registered by /token (in index.ts) and checked FIRST in
+// validateAuth — no Supabase lookup, no MCP_AUTH_TOKEN compare.
+
+interface SessionTokenEntry { expiresAt: number; }
+const sessionTokens = new Map<string, SessionTokenEntry>();
+const SESSION_TOKENS_MAX = 5000;
+
+export function registerSessionToken(token: string, ttlSeconds: number): void {
+  // FIFO eviction at cap
+  if (sessionTokens.size >= SESSION_TOKENS_MAX) {
+    const oldest = sessionTokens.keys().next().value;
+    if (oldest) sessionTokens.delete(oldest);
+  }
+  sessionTokens.set(token, { expiresAt: Date.now() + ttlSeconds * 1000 });
+}
+
+export function invalidateSessionToken(token: string): void {
+  sessionTokens.delete(token);
+}
+
+function sessionTokenValid(token: string): boolean {
+  const entry = sessionTokens.get(token);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    sessionTokens.delete(token);
+    return false;
+  }
+  return true;
+}
+
+// Prune expired entries every 5 minutes to bound memory
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, e] of sessionTokens) {
+    if (now > e.expiresAt) sessionTokens.delete(t);
+  }
+}, 5 * 60_000);
+
+// ─── F-OP-36: Supabase circuit breaker ────────────────────────────────────────
+// Bounds total Supabase call rate across all callers. When the cap is exceeded,
+// the circuit opens for one window — new-token lookups skip Supabase (and fail
+// closed, translated to 503 by the HTTP layer). Positive-cache hits still succeed.
+
+const CIRCUIT_WINDOW_MS = 60_000;
+const CIRCUIT_THRESHOLD = parseInt(process.env.SUPABASE_CIRCUIT_THRESHOLD || '120', 10);
+let supabaseCallTimestamps: number[] = [];
+let circuitOpenUntil = 0;
+
+export function supabaseCircuitOpen(): boolean {
+  return Date.now() < circuitOpenUntil;
+}
+
+function supabaseCircuitAllow(): boolean {
+  const now = Date.now();
+  if (now < circuitOpenUntil) return false;
+  supabaseCallTimestamps = supabaseCallTimestamps.filter(ts => now - ts < CIRCUIT_WINDOW_MS);
+  if (supabaseCallTimestamps.length >= CIRCUIT_THRESHOLD) {
+    circuitOpenUntil = now + CIRCUIT_WINDOW_MS;
+    return false;
+  }
+  supabaseCallTimestamps.push(now);
+  return true;
+}
+
 function cacheGet(token: string): boolean | null {
   const pos = authCachePositive.get(token);
   if (pos) {
@@ -151,10 +219,21 @@ export async function validateAuth(req: Request): Promise<boolean> {
   // touching Supabase. Prevents quota exhaustion via flood of random Bearer tokens.
   if (!isValidTokenShape(token)) return false;
 
+  // F-OP-35: OAuth session tokens checked FIRST — zero external I/O, decoupled
+  // from MCP_AUTH_TOKEN. Any PKCE-successful /token exchange lands here.
+  if (sessionTokenValid(token)) return true;
+
   // Mode A: Supabase multi-token validation (marketplace / billing mode)
   if (SUPABASE_URL && SUPABASE_KEY) {
     const cached = cacheGet(token);
     if (cached !== null) return cached;
+
+    // F-OP-36: circuit breaker — skip Supabase when too many cache-misses per minute.
+    // Positive cache (above) still returns cached valid tokens; new tokens fail closed
+    // and the HTTP layer converts that to 503 when supabaseCircuitOpen() is true.
+    if (!supabaseCircuitAllow()) {
+      return false;
+    }
 
     const valid = await validateAgainstSupabase(token);
     cacheSet(token, valid);

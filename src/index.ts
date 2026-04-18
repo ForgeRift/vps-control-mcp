@@ -12,7 +12,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import type { EventStore, StreamId, EventId } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import dotenv from 'dotenv';
 import { CONFIG } from './config.js';
-import { validateAuth } from './auth.js';
+import { validateAuth, registerSessionToken, supabaseCircuitOpen } from './auth.js';
 import { auditLog } from './audit.js';
 import { TOOLS, executeTool } from './tools.js';
 
@@ -203,13 +203,70 @@ setInterval(() => {
   }
 }, 5 * 60_000);
 
+// --- F-OP-36: per-IP rate limit, evaluated BEFORE validateAuth ---------------
+// The per-token limiter above protects authenticated callers from runaway loops.
+// Per-IP limiter protects Supabase quota from unauthenticated callers sending
+// floods of random tokens (each misses both caches on first hit and reaches
+// Supabase until the circuit breaker trips).
+const IP_RATE_LIMIT_PER_MIN = parseInt(process.env.IP_RATE_LIMIT_PER_MIN || '60', 10);
+const IP_RATE_LIMIT_WINDOW_MS = 60_000;
+const ipRateLimitBuckets = new Map<string, number[]>();
+
+function checkIpRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const bucket = ipRateLimitBuckets.get(ip) || [];
+  const filtered = bucket.filter(ts => now - ts < IP_RATE_LIMIT_WINDOW_MS);
+  if (filtered.length >= IP_RATE_LIMIT_PER_MIN) {
+    ipRateLimitBuckets.set(ip, filtered);
+    return false;
+  }
+  filtered.push(now);
+  ipRateLimitBuckets.set(ip, filtered);
+  return true;
+}
+
+function callerIp(req: express.Request): string {
+  const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
+  return fwd || req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+// Prune IP buckets every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of ipRateLimitBuckets) {
+    const filtered = bucket.filter(ts => now - ts < IP_RATE_LIMIT_WINDOW_MS);
+    if (filtered.length === 0) ipRateLimitBuckets.delete(ip);
+    else ipRateLimitBuckets.set(ip, filtered);
+  }
+}, 5 * 60_000);
+
 // requireAuth is async because validateAuth now does a Supabase lookup in billing mode
 async function requireAuth(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction
 ): Promise<void> {
+  // F-OP-36: per-IP rate limit BEFORE validateAuth to protect Supabase quota.
+  const ip = callerIp(req);
+  if (!checkIpRateLimit(ip)) {
+    res.status(429).set('Retry-After', '60').json({
+      error: 'Rate limit exceeded (per-IP)',
+      message: `Maximum ${IP_RATE_LIMIT_PER_MIN} requests per minute per IP.`,
+      retry_after_seconds: 60,
+    });
+    return;
+  }
+
   if (!(await validateAuth(req))) {
+    // F-OP-36: circuit-open + Supabase mode → 503 (not 401) so legitimate callers
+    // can distinguish "backend overloaded, retry" from "your token is invalid".
+    const supabaseMode = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+    if (supabaseMode && supabaseCircuitOpen()) {
+      res.status(503).set('Retry-After', '60').json({
+        error: 'Auth backend temporarily unavailable. Retry in 60s.',
+      });
+      return;
+    }
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -423,31 +480,31 @@ app.get('/authorize', (req, res) => {
     return;
   }
 
-  // F-NEW-6 + F-OP-26: PKCE enforcement.
-  // If code_challenge_method is present, S256 is the only accepted method.
-  // If S256 is signalled, a non-empty, correctly-formatted challenge is REQUIRED —
-  // an empty challenge silently disables PKCE, enabling full token theft via code leak.
-  if (code_challenge_method) {
-    if (code_challenge_method !== 'S256') {
-      res.status(400).send('Unsupported code_challenge_method. Use S256.');
-      return;
-    }
-    // F-OP-26: enforce non-empty + valid charset (RFC 7636 §4.2: [A-Za-z0-9._~-]{43,128})
-    if (!code_challenge || !/^[A-Za-z0-9_\-.~]{43,128}$/.test(code_challenge)) {
-      res.status(400).send('code_challenge required when code_challenge_method=S256 (43–128 URL-safe chars).');
-      return;
-    }
+  // F-OP-35 + F-NEW-6 + F-OP-26: PKCE MANDATORY at /authorize.
+  // v1.7.0 only enforced PKCE when code_challenge_method was present — omitting
+  // the param skipped the block entirely and let an attacker exchange the code
+  // for the root MCP_AUTH_TOKEN unauthenticated. PKCE is now unconditional:
+  // every code must carry a valid code_challenge. /token refuses any code whose
+  // stored entry lacks codeChallenge.
+  if (!code_challenge || !/^[A-Za-z0-9_\-.~]{43,128}$/.test(code_challenge)) {
+    res.status(400).send('PKCE required: code_challenge (43–128 URL-safe chars) is mandatory.');
+    return;
+  }
+  if (code_challenge_method && code_challenge_method !== 'S256') {
+    res.status(400).send('Unsupported code_challenge_method. Use S256.');
+    return;
   }
 
   // F-VM-6: crypto-random, not Math.random(). 32 bytes = 256 bits of entropy.
   const code = crypto.randomBytes(32).toString('base64url');
   // F-OP-22/25: schedule expiry timer and store the handle so FIFO eviction can clearTimeout.
   const timer = setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
-  const entry: AuthCodeEntry = { issuedAt: Date.now(), timer };
-  if (code_challenge && code_challenge_method === 'S256') {
-    entry.codeChallenge = code_challenge;
-    entry.codeChallengeMethod = 'S256';
-  }
+  const entry: AuthCodeEntry = {
+    issuedAt: Date.now(),
+    timer,
+    codeChallenge: code_challenge,
+    codeChallengeMethod: 'S256',
+  };
   // F-OP-22: use helper — FIFO-evicts oldest entry (with clearTimeout) when at cap.
   insertAuthCode(code, entry);
 
@@ -482,6 +539,10 @@ app.post('/token', (req, res) => {
     const refreshTimer = setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
     // F-OP-22/25: use helper — FIFO-evicts oldest (with clearTimeout) when at cap.
     insertRefreshToken(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now(), timer: refreshTimer });
+    // F-OP-35: re-register the session token in the auth-side store to extend its TTL
+    // through this refresh window. Without this, the access_token would expire from the
+    // session store while the refresh token is still valid, causing 401s mid-session.
+    registerSessionToken(entry.accessToken, TOKEN_TTL_SECONDS);
 
     res.json({
       access_token:  entry.accessToken,
@@ -510,23 +571,29 @@ app.post('/token', (req, res) => {
   // the stale delete from firing and avoids the timer leaking in the event loop.
   clearTimeout(codeEntry.timer);
 
-  // F-NEW-6: PKCE verification (S256). Code is already consumed; PKCE failure = fatal, no retry.
-  // If a code_challenge was registered at /authorize, the client MUST present
-  // a code_verifier whose SHA-256 matches. Missing or wrong verifier = invalid_grant.
-  if (codeEntry.codeChallenge) {
-    const verifier = (req.body as Record<string, string>).code_verifier ?? '';
-    if (!verifier) {
-      res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required for PKCE flow.' });
-      return;
-    }
-    const computed = crypto.createHash('sha256').update(verifier).digest('base64url');
-    if (computed !== codeEntry.codeChallenge) {
-      res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge.' });
-      return;
-    }
+  // F-OP-35: every authorize code now carries a PKCE binding (mandatory upstream).
+  // Refuse any code whose entry lacks codeChallenge — this is a defence in depth
+  // against an entry being corrupted or injected out-of-band.
+  if (!codeEntry.codeChallenge) {
+    res.status(400).json({ error: 'invalid_grant', error_description: 'No PKCE binding on this code.' });
+    return;
+  }
+  const verifier = (req.body as Record<string, string>).code_verifier ?? '';
+  if (!verifier) {
+    res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required for PKCE flow.' });
+    return;
+  }
+  const computed = crypto.createHash('sha256').update(verifier).digest('base64url');
+  if (computed !== codeEntry.codeChallenge) {
+    res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge.' });
+    return;
   }
 
-  const accessToken = process.env.MCP_AUTH_TOKEN!;
+  // F-OP-35: mint a per-session crypto-random access token — decoupled from
+  // process.env.MCP_AUTH_TOKEN. Any future auth-flow flaw can only ever leak a
+  // session-bound token with known TTL, never the master root credential.
+  const accessToken = crypto.randomBytes(32).toString('base64url');
+  registerSessionToken(accessToken, TOKEN_TTL_SECONDS);
   // F-VM-6: crypto-random refresh token
   // F-OP-25: store timer handle so FIFO eviction and early rotation can clearTimeout.
   const newRefresh = crypto.randomBytes(32).toString('base64url');

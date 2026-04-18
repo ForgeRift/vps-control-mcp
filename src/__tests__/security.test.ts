@@ -771,3 +771,49 @@ describe('F-OP-19 — node --inspect* blocked (V8 remote debugger = root RCE)', 
     assert.doesNotThrow(() => validateAgainstAllowlist('node --version'));
   });
 });
+
+// ─── Fifth-pass findings (F-OP-33 / F-OP-34) — regression tests ──────────────
+
+describe('F-OP-33 — validateArgPath resolves relative paths before allowlist check', () => {
+  function expectInvalidArgs(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+  }
+  it('cat ../../etc/group is blocked (path not permitted after resolve)', () => expectInvalidArgs('cat ../../etc/group'));
+  it('wc ../../var/log/syslog is blocked', () => expectInvalidArgs('wc ../../var/log/syslog'));
+  it('node ../../tmp/x.js is blocked', () => expectInvalidArgs('node ../../tmp/x.js'));
+  it('sort ../../etc/passwd is blocked', () => expectInvalidArgs('sort ../../etc/passwd'));
+  it('cut -d: -f1 ../../etc/passwd is blocked', () => expectInvalidArgs('cut -d: -f1 ../../etc/passwd'));
+  it('diff ../../etc/hosts ../../etc/resolv.conf is blocked', () => expectInvalidArgs('diff ../../etc/hosts ../../etc/resolv.conf'));
+  it('ls ../../etc is blocked', () => expectInvalidArgs('ls ../../etc'));
+  it('find ../../etc -name x is blocked', () => expectInvalidArgs('find ../../etc -name "*.conf"'));
+});
+
+describe('F-OP-34 — sort -o and uniq OUTPUT are blocked file-write primitives', () => {
+  function expectInvalidArgs(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+  }
+  it('sort -o writes are blocked', () => expectInvalidArgs('sort -o /root/sharpedge/x /root/sharpedge/y'));
+  it('sort --output writes are blocked', () => expectInvalidArgs('sort --output /root/sharpedge/x /root/sharpedge/y'));
+  it('sort --output=FILE writes are blocked', () => expectInvalidArgs('sort --output=/root/sharpedge/x /root/sharpedge/y'));
+  it('uniq INPUT OUTPUT is blocked (second positional)', () => expectInvalidArgs('uniq /root/sharpedge/a /root/sharpedge/b'));
+  it('uniq single positional is NOT rejected for being a file-write', () => {
+    // We don't assert acceptance (path may not exist in sandbox). We only assert the
+    // rejection reason — if any — is NOT the "second positional (OUTPUT file)" rule.
+    try { validateAgainstAllowlist('uniq /root/sharpedge/package.json'); } catch (e) {
+      assert.doesNotMatch(String(e), /second positional/i,
+        'uniq with one positional must not be rejected as "second positional OUTPUT"');
+      assert.doesNotMatch(String(e), /prohibited — use stdout only/i,
+        'uniq with one positional must not hit the uniq file-write rule');
+    }
+  });
+});
+
+describe('F-OP-33 sensitive-pattern defence-in-depth', () => {
+  it('SENSITIVE_FILE_PATTERNS includes /etc/ and /var/log/ after F-OP-33', () => {
+    const srcs = SENSITIVE_FILE_PATTERNS.map((p: RegExp) => p.source);
+    assert.ok(srcs.some((s: string) => /\\\/etc\\\//.test(s)), 'expected /etc/ pattern to be present');
+    assert.ok(srcs.some((s: string) => /\\\/var\\\/log\\\//.test(s)), 'expected /var/log/ pattern to be present');
+    assert.ok(srcs.some((s: string) => /\\\/proc\\\//.test(s)), 'expected /proc/ pattern to be present');
+    assert.ok(srcs.some((s: string) => /\\\/sys\\\//.test(s)), 'expected /sys/ pattern to be present');
+  });
+});

@@ -218,3 +218,39 @@ All 13 fourth-pass findings closed:
 | F-OP-30 | MEDIUM | `CURRENT_VERSION` read from `package.json` at startup |
 | F-OP-31 | LOW | `/health` returns `{status:'ok'}` only for unauth callers |
 | F-OP-32 | LOW | Atomic `JOBS_FILE` write via tmp + `renameSync` |
+
+
+---
+
+# Fifth Pass — 2026-04-18 (S51 review → S52 close)
+
+Four new findings (3 CRITICAL, 1 HIGH) against v1.7.0. All closed in v1.7.1.
+
+### F-OP-33 — CRITICAL — `validateArgPath` relative-path traversal bypasses `ALLOWED_READ_DIRS`
+**Attack vector:** `validateArgPath` passed raw args (e.g. `../../etc/passwd`) directly to `validatePath`, which compared string-prefix only. Relative traversal was never resolved.
+**Fix:** Resolve every non-flag arg via `path.resolve(arg)` before `validatePath`. The realpathSync + prefix guard now operates on the canonical path. `SENSITIVE_FILE_PATTERNS` extended to include `/etc/`, `/var/log/`, `/proc/`, `/sys/`, `/root/(!sharpedge)` for defence-in-depth.
+**Status:** FIXED (S52)
+
+### F-OP-34 — CRITICAL — `sort -o` / `uniq INPUT OUTPUT` are unblocked file-write primitives
+**Attack vector:** `sort -o /dst /src` and `uniq /src /dst` both write attacker-chosen files; both were in POSITIVE_ALLOWLIST with `allowAny`.
+**Fix:** New `validateSortArgs` rejects `-o/--output/--output=`. New `validateUniqArgs` rejects any second positional argument (the OUTPUT file). Both delegate to `validateArgPath` for remaining shape/allowed-dir checks.
+**Status:** FIXED (S52)
+
+### F-OP-35 — CRITICAL — Pre-auth root token mint via PKCE omission
+**Attack vector:** `/authorize` issued codes for any `code_challenge` shape when `code_challenge_method` was omitted — and `/token` returned `MCP_AUTH_TOKEN` as `access_token` in that path. Unauthenticated callers could obtain the master token.
+**Fix:** `/authorize` now requires `code_challenge` matching `^[A-Za-z0-9_\-.~]{43,128}$` and defaults method to S256; method other than S256 is rejected. `/token` authorization_code grant mandates `code_verifier` with SHA-256 match. Access tokens are now per-flow `crypto.randomBytes(32).base64url` registered via `registerSessionToken()` — `MCP_AUTH_TOKEN` is never leaked. Refresh grant re-registers as session token.
+**Status:** FIXED (S52)
+
+### F-OP-36 — HIGH — Per-token rate limit allows unauthenticated Supabase quota exhaustion
+**Attack vector:** Random Bearer tokens hit Supabase because the rate limiter keyed on token, not caller IP. Single attacker with many tokens could burn the plan quota.
+**Fix:** Added per-IP limiter (60 req/min/IP) applied BEFORE `validateAuth`, with X-Forwarded-For aware IP extraction. Added Supabase circuit breaker (120 calls/min window) — when open, new-token lookups skip Supabase and fail closed; positive cache still serves. HTTP layer maps `supabaseCircuitOpen()` to 503.
+**Status:** FIXED (S52)
+
+## v1.7.1 Fix Summary
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| F-OP-33 | CRITICAL | `path.resolve()` before `validatePath`; sensitive patterns extended |
+| F-OP-34 | CRITICAL | `validateSortArgs` / `validateUniqArgs` block file-write primitives |
+| F-OP-35 | CRITICAL | PKCE mandatory; per-flow access tokens decouple from MCP_AUTH_TOKEN |
+| F-OP-36 | HIGH | Per-IP rate limit + Supabase circuit breaker |

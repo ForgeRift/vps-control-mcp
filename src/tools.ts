@@ -375,6 +375,15 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   /\.bashrc(?![a-zA-Z0-9])/i,         // bash shell config (may export secrets)
   /\.zshrc(?![a-zA-Z0-9])/i,          // zsh shell config (may export secrets)
   /\.profile(?![a-zA-Z0-9])/i,        // POSIX shell profile (may export secrets)
+  // F-OP-33: defence-in-depth. Primary fix is relative-path resolution in
+  // validateArgPath, but these patterns also catch any literal path that
+  // reaches a pattern-only gate (rejectSensitiveArgs). Any access to system
+  // config dirs through an MCP tool should be blocked.
+  /\/etc\//,                          // /etc — system configuration
+  /\/var\/log\//,                     // /var/log — host logs (not pm2 app logs)
+  /\/proc\//,                         // /proc — kernel VFS
+  /\/sys\//,                          // /sys — kernel VFS
+  /\/root\/(?!sharpedge\/)/,          // /root but outside /root/sharpedge
 ];
 
 function validatePath(filePath: string): string {
@@ -741,31 +750,58 @@ const rejectSensitiveArgs: ArgValidator = (args) => {
   return null;
 };
 
-// F-OP-20/21/24: Full validatePath() semantics applied to positional path args.
-// For absolute paths: realpath-resolve symlinks + ALLOWED_READ_DIRS allowlist + SENSITIVE_FILE_PATTERNS.
-// This closes the symlink-escape bypass (F-OP-20) and the sensitive-directory readable-via-reader
-// bypass (F-OP-21): sort /etc/passwd, cut /etc/group, cat /var/log/auth.log etc. are all blocked
-// because /etc and /var/log are outside ALLOWED_READ_DIRS ([APP_DIR, PM2_LOG_DIR]).
-// For relative paths/filenames: name-pattern check only (no absolute base to resolve against).
+// F-OP-20/21/24/33: Full validatePath() semantics applied to positional path args.
+// For absolute AND relative paths: path.resolve() → realpath-resolve symlinks +
+// ALLOWED_READ_DIRS allowlist + SENSITIVE_FILE_PATTERNS.
+// This closes the symlink-escape bypass (F-OP-20), the sensitive-directory readable-via-reader
+// bypass (F-OP-21), and the relative-path traversal bypass (F-OP-33): sort /etc/passwd,
+// cut /etc/group, cat /var/log/auth.log, AND sort ../../etc/group are all blocked.
 // For flags (-x, --x): no check.
 const validateArgPath: ArgValidator = (args) => {
   for (const arg of args) {
-    if (arg.startsWith('/')) {
-      // Absolute path: full security triple (symlink resolution + allowlist + patterns).
-      try {
-        validatePath(arg);
-      } catch (err) {
-        return (err as Error).message;
-      }
-    } else if (!arg.startsWith('-')) {
-      // Relative path or bare filename: check sensitive name patterns.
-      if (SENSITIVE_FILE_PATTERNS.some(p => p.test(arg))) {
-        return `Argument "${arg}" matches a sensitive file pattern and is not permitted.`;
-      }
+    if (arg.startsWith('-')) {
+      // Flags (-x, --long): no path check.
+      continue;
     }
-    // Flags (-x, --long): no path check.
+    // F-OP-33: resolve relative args against process.cwd() before validatePath.
+    // execFile would otherwise resolve the arg against the mcp working directory
+    // at kernel level, letting ../../etc/passwd escape ALLOWED_READ_DIRS entirely.
+    try {
+      validatePath(path.resolve(arg));
+    } catch (err) {
+      return (err as Error).message;
+    }
   }
   return null;
+};
+
+// F-OP-34: dedicated validator for `sort`. Reject -o/--output/--output=... because
+// sort with -o is a file-write primitive (writes sorted output to FILE). Read-only
+// sort invocations still fall through to validateArgPath for path containment.
+const validateSortArgs: ArgValidator = (args) => {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-o' || a === '--output' || a.startsWith('--output=')) {
+      return 'sort -o/--output (file write) is prohibited — this MCP is read-only.';
+    }
+  }
+  return validateArgPath(args);
+};
+
+// F-OP-34: dedicated validator for `uniq`. Reject the second positional arg because
+// `uniq INPUT OUTPUT` writes to OUTPUT. At most one non-flag positional is allowed.
+// Read-only uniq invocations still fall through to validateArgPath for containment.
+const validateUniqArgs: ArgValidator = (args) => {
+  let positionals = 0;
+  for (const a of args) {
+    if (!a.startsWith('-')) {
+      positionals++;
+      if (positionals > 1) {
+        return 'uniq second positional (OUTPUT file) is prohibited — use stdout only.';
+      }
+    }
+  }
+  return validateArgPath(args);
 };
 
 // Allows everything — used for truly safe read-only commands.
@@ -1013,8 +1049,8 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'grep':     { description: 'Text search (non-recursive)', argValidator: validateGrepArgs },
   // NOTE: 'awk' removed (F-OP-1) — awk system()/getline provides full root RCE. No safe subset.
   'sed':      { description: 'Stream editor (no -i, no e cmd)', argValidator: validateSedArgs },
-  'sort':     { description: 'Sort lines',               argValidator: validateArgPath },
-  'uniq':     { description: 'Deduplicate lines',        argValidator: validateArgPath },
+  'sort':     { description: 'Sort lines',               argValidator: validateSortArgs },
+  'uniq':     { description: 'Deduplicate lines',        argValidator: validateUniqArgs },
   'tr':       { description: 'Translate characters',     argValidator: validateArgPath },
   'cut':      { description: 'Cut fields',               argValidator: validateArgPath },
   'paste':    { description: 'Merge files/lines',        argValidator: validateArgPath },
