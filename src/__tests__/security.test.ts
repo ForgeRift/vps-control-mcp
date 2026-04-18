@@ -239,7 +239,7 @@ describe('Legitimate commands pass validation', () => {
     ['head -n 20 out.log',         'head (non-.env, non-/etc)'],
     ['find . -name "*.ts"',        'find without -exec'],
     ['git -C /root/sharpedge status', 'git status via execFile-style'],
-    ['pm2 jlist',                  'pm2 list'],
+    ['pm2 status',                 'pm2 status'],
     ['free -m',                    'free'],
     ['df -h',                      'df'],
     ['uptime',                     'uptime'],
@@ -268,22 +268,22 @@ describe('AMBER tier — warning flow', () => {
     const warn = checkAmberWarnings('apt-get update');
     assert.notEqual(warn, null, 'warning must not be silently dropped');
   });
-  it('find -exec warns', () => {
-    const warn = checkAmberWarnings('find . -exec rm {} +');
-    // find is AMBER because of -exec, but note rm is hard-blocked by validateCommand
-    // checkAmberWarnings only tests AMBER match; RED blocks would throw earlier
-    assert.ok(warn);
+  it('find -exec is now RED (removed from AMBER — F-OP-3)', () => {
+    // find -exec was promoted from AMBER to RED; checkAmberWarnings should return null
+    const warn = checkAmberWarnings('find . -type f -name "*.log"');
+    assert.equal(warn, null, 'plain find should not be AMBER');
   });
   it('xargs warns', () => {
     const warn = checkAmberWarnings('cat list | xargs touch');
     assert.ok(warn);
   });
-  it('sed -i warns', () => {
-    const warn = checkAmberWarnings('sed -i "s/foo/bar/" file');
-    assert.ok(warn);
+  it('sed -i is now RED (removed from AMBER — F-OP-2)', () => {
+    // sed -i was promoted from AMBER to RED; checkAmberWarnings should return null
+    const warn = checkAmberWarnings('sed s/foo/bar/ file.txt');
+    assert.equal(warn, null, 'plain sed should not be AMBER');
   });
   it('non-AMBER command returns null', () => {
-    const warn = checkAmberWarnings('ps aux');
+    const warn = checkAmberWarnings('df -h');
     assert.equal(warn, null);
   });
 });
@@ -432,8 +432,8 @@ describe('BLOCKED_PATTERNS structural health', () => {
 });
 
 describe('AMBER_PATTERNS structural health', () => {
-  it('has at least 4 patterns', () => {
-    assert.ok(AMBER_PATTERNS.length >= 4);
+  it('has at least 1 pattern (find -exec, awk, sed -i promoted to RED in F-OP-1/2/3)', () => {
+    assert.ok(AMBER_PATTERNS.length >= 1);
   });
   it('every entry has a risk string', () => {
     for (const p of AMBER_PATTERNS) {
@@ -482,7 +482,6 @@ describe('validateAgainstAllowlist — default-deny', () => {
   // ── Allowlisted binaries pass ────────────────────────────────────────────
   it('df -h passes', () => expectAllowlisted('df -h'));
   it('free -h passes', () => expectAllowlisted('free -h'));
-  it('ps aux passes', () => expectAllowlisted('ps aux'));
   it('ls /root/sharpedge passes', () => expectAllowlisted('ls /root/sharpedge'));
   it('cat /root/sharpedge/out.log passes', () => expectAllowlisted('cat /root/sharpedge/out.log'));
   it('tail -n 50 /root/sharpedge/out.log passes', () => expectAllowlisted('tail -n 50 /root/sharpedge/out.log'));
@@ -514,9 +513,11 @@ describe('validateAgainstAllowlist — default-deny', () => {
   it('tac is not on allowlist', () => expectNotAllowlisted('tac /etc/shadow'));
   it('rev is not on allowlist', () => expectNotAllowlisted('rev /etc/shadow'));
   it('base64 is not on allowlist', () => expectNotAllowlisted('base64 /root/.env'));
-  it('awk blocked for non-allowlisted use', () => {
-    // awk IS on the allowlist, but /etc/shadow is sensitive — test the arg validator
-    expectInvalidArgs('awk NR==1 /etc/shadow');
+  it('awk is not on allowlist (F-OP-1 — system() provides full root RCE)', () => {
+    expectNotAllowlisted('awk NR==1 /etc/shadow');
+  });
+  it('awk system() would be blocked by not-allowlisted', () => {
+    expectNotAllowlisted('awk BEGIN{system("id")}');
   });
 
   // ── Path-qualified binary names are blocked ───────────────────────────────
@@ -588,5 +589,185 @@ describe('validateAgainstAllowlist — default-deny', () => {
       assert.equal(typeof entry.argValidator, 'function',
         `missing argValidator on allowlist entry for "${bin}"`);
     }
+  });
+});
+
+// ─── 14. F-OP hardening tests (third-pass adversarial review, S47) ─────────────
+
+describe('F-OP-1 — awk removed from allowlist (system() / getline RCE)', () => {
+  function expectNotAllowlisted(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[not-allowlisted\]/);
+  }
+  it('awk is not on POSITIVE_ALLOWLIST', () => {
+    assert.ok(!('awk' in POSITIVE_ALLOWLIST), 'awk must not be on allowlist');
+  });
+  it('awk BEGIN{system("id")} is not-allowlisted', () => expectNotAllowlisted('awk BEGIN{system("id")}'));
+  it('awk BEGIN{system("base64/root/.env")} is not-allowlisted', () => expectNotAllowlisted('awk \'BEGIN{system("base64 /root/sharpedge/.env")}\''));
+  it('awk getline is not-allowlisted', () => expectNotAllowlisted('awk \'BEGIN{while((getline<"/root/.env")>0)print}\''));
+});
+
+describe('F-OP-2 — sed e command and -i promoted to RED', () => {
+  it('sed 1ewhoami is RED (line-address+e shell execution)', () => {
+    expectBlocked('sed 1ewhoami /dev/null');
+  });
+  it('sed $ecmd is RED', () => {
+    expectBlocked('sed $eid /dev/null');
+  });
+  it('sed -i is RED (in-place file modification)', () => {
+    expectBlocked('sed -i "s/foo/bar/" file.txt');
+  });
+  it('sed --in-place is RED', () => {
+    expectBlocked('sed --in-place "s/a/b/" file');
+  });
+  it('sed substitution e-flag is blocked by arg validator', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('sed s/a/b/e'),
+      /BLOCKED \[invalid-args\]/,
+      'sed s/a/b/e should be blocked by validateSedArgs'
+    );
+  });
+  it('plain sed s/pattern/replace/g passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('sed s/foo/bar/g /root/sharpedge/out.log'));
+  });
+});
+
+describe('F-OP-3 — find -exec promoted to RED', () => {
+  it('find -exec cat is RED', () => {
+    expectBlocked('find /root/sharpedge -type f -exec cat {} +');
+  });
+  it('find -execdir is RED', () => {
+    expectBlocked('find /root -type f -execdir head {} +');
+  });
+  it('find -exec (BLOCKED by arg validator too)', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('find /root/sharpedge -exec cat {} +'),
+      /BLOCKED \[invalid-args\]|BLOCKED \[code-exec\]/,
+    );
+  });
+  it('plain find -name passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('find /root/sharpedge -name "*.log"'));
+  });
+});
+
+describe('F-OP-4 — grep -r/-R recursive blocked', () => {
+  it('grep -r is blocked by arg validator', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('grep -r API_KEY /root/sharpedge'),
+      /BLOCKED \[invalid-args\]/,
+    );
+  });
+  it('grep -R is blocked', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('grep -R TOKEN /root/sharpedge'),
+      /BLOCKED \[invalid-args\]/,
+    );
+  });
+  it('grep --recursive is blocked', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('grep --recursive SECRET /root'),
+      /BLOCKED \[invalid-args\]/,
+    );
+  });
+  it('grep -rh (combined with r) is blocked', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('grep -rh API_KEY /root/sharpedge'),
+      /BLOCKED \[invalid-args\]/,
+    );
+  });
+  it('grep -n (non-recursive) passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('grep -n error /root/sharpedge/out.log'));
+  });
+  it('grep with pattern and file passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('grep TOKEN /root/sharpedge/out.log'));
+  });
+});
+
+describe('F-OP-5 — SENSITIVE_FILE_PATTERNS .env regex tightened', () => {
+  const tightRegex = SENSITIVE_FILE_PATTERNS[0]; // /\.env(?![a-zA-Z0-9])/i
+  it('.env at end-of-string matches', () => {
+    assert.ok(tightRegex.test('/root/sharpedge/.env'));
+  });
+  it('.env.production matches', () => {
+    assert.ok(tightRegex.test('/root/sharpedge/.env.production'));
+  });
+  it('.env" (quote suffix) now matches (was bypassed in v1.5.0)', () => {
+    assert.ok(tightRegex.test('/root/.env"'));
+  });
+  it('.env) (paren suffix) now matches', () => {
+    assert.ok(tightRegex.test('/root/.env)'));
+  });
+  it('.env/ (trailing slash) now matches', () => {
+    assert.ok(tightRegex.test('/root/.env/'));
+  });
+  it('.env$IFS suffix — $ is non-alphanum so matches', () => {
+    assert.ok(tightRegex.test('/root/.env$'));
+  });
+  it('.envrc does NOT match (has alphanum suffix r)', () => {
+    // .envrc is a separate tool (direnv) and while suspicious, is a separate concern
+    assert.ok(!tightRegex.test('/root/.envrc'));
+  });
+  it('.environment does NOT match (has alphanum suffix i)', () => {
+    assert.ok(!tightRegex.test('/root/.environment'));
+  });
+  it('.env_local with underscore — underscore is non-alphanum, matches', () => {
+    assert.ok(tightRegex.test('/root/.env_local'));
+  });
+});
+
+describe('F-OP-6/7 — pm2 jlist/describe/info/show/prettylist blocked (leak pm2_env)', () => {
+  function expectInvalidArgs(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+  }
+  it('pm2 jlist is blocked (leaks MCP_AUTH_TOKEN via pm2_env)', () => expectInvalidArgs('pm2 jlist'));
+  it('pm2 prettylist is blocked', () => expectInvalidArgs('pm2 prettylist'));
+  it('pm2 describe vps-mcp is blocked', () => expectInvalidArgs('pm2 describe vps-mcp'));
+  it('pm2 info vps-mcp is blocked', () => expectInvalidArgs('pm2 info vps-mcp'));
+  it('pm2 show 0 is blocked', () => expectInvalidArgs('pm2 show 0'));
+  it('pm2 status still passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 status'));
+  });
+  it('pm2 list still passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 list'));
+  });
+  it('pm2 logs still passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 logs'));
+  });
+});
+
+describe('F-OP-18 — ps removed from allowlist (auxe dumps MCP_AUTH_TOKEN)', () => {
+  it('ps is not on POSITIVE_ALLOWLIST', () => {
+    assert.ok(!('ps' in POSITIVE_ALLOWLIST), 'ps must not be on allowlist');
+  });
+  it('ps auxe is blocked by RED pattern', () => {
+    expectBlocked('ps auxe');
+  });
+  it('ps is not-allowlisted via validateAgainstAllowlist', () => {
+    assert.throws(
+      () => validateAgainstAllowlist('ps aux'),
+      /BLOCKED \[not-allowlisted\]/,
+    );
+  });
+  it('ps -eo cmd,env env-dump pattern is RED', () => {
+    expectBlocked('ps -eo cmd,env');
+  });
+});
+
+describe('F-OP-19 — node --inspect* blocked (V8 remote debugger = root RCE)', () => {
+  function expectInvalidArgs(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+  }
+  it('node --inspect=0.0.0.0:9229 is blocked', () => expectInvalidArgs('node --inspect=0.0.0.0:9229 script.js'));
+  it('node --inspect is blocked', () => expectInvalidArgs('node --inspect script.js'));
+  it('node --inspect-brk is blocked', () => expectInvalidArgs('node --inspect-brk=9229 script.js'));
+  it('node --inspect-port is blocked', () => expectInvalidArgs('node --inspect-port=9229 script.js'));
+  it('node --experimental-loader is blocked', () => expectInvalidArgs('node --experimental-loader ./evil.mjs script.js'));
+  it('node --loader is blocked', () => expectInvalidArgs('node --loader ./evil.mjs script.js'));
+  it('node --cpu-prof is blocked', () => expectInvalidArgs('node --cpu-prof script.js'));
+  it('node --heap-prof is blocked', () => expectInvalidArgs('node --heap-prof script.js'));
+  it('node script.js still passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('node script.js'));
+  });
+  it('node --version still passes', () => {
+    assert.doesNotThrow(() => validateAgainstAllowlist('node --version'));
   });
 });

@@ -338,7 +338,7 @@ function capString(value: string, maxLen: number, field: string): string {
 // Sensitive filenames and patterns blocked even inside ALLOWED_READ_DIRS.
 // These contain credentials, keys, or secrets that must never be exposed via MCP.
 const SENSITIVE_FILE_PATTERNS: RegExp[] = [
-  /\.env($|\.)/i,                    // .env, .env.local, .env.production, etc.
+  /\.env(?![a-zA-Z0-9])/i,            // .env, .env.local, .env.production, .env", .env), .env/ etc.
   /\.ssh\//,                         // SSH keys
   /id_(rsa|ed25519|ecdsa|dsa)/,      // SSH key files by name
   /authorized_keys/,
@@ -618,6 +618,22 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bdmesg\b/,                    category: 'info-leak',  reason: 'dmesg is prohibited (kernel log access).' },
   { pattern: /\blast\s/,                     category: 'info-leak',  reason: 'last is prohibited (login history).' },
   { pattern: /\blastlog\b/,                  category: 'info-leak',  reason: 'lastlog is prohibited (login history).' },
+
+  // --- F-OP-3: find -exec / -execdir (promoted from AMBER — spawns child processes bypassing validation) ---
+  { pattern: /-exec\b/,                      category: 'code-exec',  reason: 'find -exec spawns child processes that bypass all MCP command validation. Use run_approved_command for specific operations instead.' },
+  { pattern: /-execdir\b/,                   category: 'code-exec',  reason: 'find -execdir spawns child processes that bypass all MCP command validation.' },
+
+  // --- F-OP-2: sed -i in-place modification (promoted from AMBER — arbitrary file write) ---
+  { pattern: /\bsed\s+-i\b/,                category: 'file-write', reason: 'sed -i (in-place file modification) is prohibited. Use the deploy tool for file modifications.' },
+  { pattern: /\bsed\b.*\s--in-place\b/,     category: 'file-write', reason: 'sed --in-place is prohibited. Use the deploy tool for file modifications.' },
+
+  // --- F-OP-2: sed e command (shell execution via GNU sed extension) ---
+  // Matches: sed 1ewhoami, sed $ecmd — line-address immediately followed by e + shell command
+  { pattern: /\bsed\b[^|&;]*\s[0-9$][^\s|]*e[^\s]/,  category: 'code-exec', reason: 'sed Xe command (line-address+e) executes arbitrary shell commands (GNU sed). Prohibited.' },
+
+  // --- F-OP-18: ps env-dump flags (belt-and-suspenders; primary fix is allowlist removal) ---
+  { pattern: /\bps\b[^|&;]*\bauxe\b/,       category: 'info-leak',  reason: 'ps auxe dumps process environment variables including secrets.' },
+  { pattern: /\bps\b[^|&;]*-[a-zA-Z]*e[a-zA-Z]*o\b/, category: 'info-leak', reason: 'ps -eo (environment output) dumps process environment variables including secrets.' },
 ];
 
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
@@ -629,10 +645,8 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
 interface AmberWarning { pattern: RegExp; risk: string; }
 const AMBER_PATTERNS: AmberWarning[] = [
   { pattern: /\bapt-get\s+update\b/,    risk: 'Package index update. Safe but slow — may timeout the SSE connection. Use run_in_background=true.' },
-  { pattern: /\bfind\b.*-exec\b/,       risk: 'find -exec can execute commands on matched files. Ensure the -exec payload is safe.' },
+  // NOTE: find -exec, awk, and sed -i have been promoted to RED (F-OP-1/2/3). Removed from AMBER.
   { pattern: /\bxargs\b/,               risk: 'xargs pipes input as arguments to another command. Ensure the target command is safe.' },
-  { pattern: /\bawk\b/,                 risk: 'awk can write files and execute shell commands via system(). Ensure the script is safe.' },
-  { pattern: /\bsed\s+-i/,              risk: 'sed -i modifies files in-place. This cannot be undone. Ensure the pattern and target are correct.' },
 ];
 
 function validateCommand(command: string): void {
@@ -749,16 +763,22 @@ function allowFlags(...permitted: string[]): ArgValidator {
   };
 }
 
-// pm2: only read-only sub-commands. restart/delete/start are handled by restart_process.
+// pm2: only read-only sub-commands that do NOT print process environment.
+// F-OP-6/7: jlist, prettylist, describe, info, show all include pm2_env which leaks MCP_AUTH_TOKEN.
+// Use get_pm2_status (structured, env-scrubbed) for status instead of pm2 jlist.
 const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
-    'status', 'list', 'ls', 'jlist', 'prettylist',
-    'describe', 'info', 'show', 'logs', 'monit',
+    'status', 'list', 'ls', 'logs', 'monit',
     'id', 'version', '--version', '-v', 'flush',
   ]);
   const sub = args[0];
   if (!sub) return null;
   if (!READ_ONLY.has(sub)) {
+    // Explicitly call out the env-leaking sub-commands with a clear message
+    const ENV_LEAKERS = new Set(['jlist', 'prettylist', 'describe', 'info', 'show']);
+    if (ENV_LEAKERS.has(sub)) {
+      return `pm2 sub-command "${sub}" is not permitted — it prints the full process environment including MCP_AUTH_TOKEN. Use the get_pm2_status tool instead.`;
+    }
     return `pm2 sub-command "${sub}" is not permitted. ` +
       `Allowed read-only sub-commands: ${[...READ_ONLY].join(', ')}. ` +
       `Use restart_process tool for pm2 restart/start/stop/delete.`;
@@ -766,11 +786,33 @@ const validatePm2Args: ArgValidator = (args) => {
   return null;
 };
 
-// node: block inline-eval flags; allow script paths (with sensitive check).
+// node: block inline-eval flags and debugger/profiler flags.
+// F-OP-19: --inspect* opens a V8 debugger port to the network (root RCE if reachable).
+// F-OP-19: --experimental-*, --loader, --import can load arbitrary modules.
+// F-OP-19: --cpu-prof*, --heap-prof*, --report-*, --diagnostic-dir write to attacker-chosen paths.
 const validateNodeArgs: ArgValidator = (args) => {
-  const BLOCKED_FLAGS = new Set(['-e', '--eval', '-p', '--print', '--input-type', '--require', '-r']);
+  const BLOCKED_EXACT = new Set([
+    '-e', '--eval', '-p', '--print', '--input-type', '--require', '-r',
+    '--inspect', '--inspect-brk', '--inspect-port', '--inspect-publish-uid',
+    '--loader', '--experimental-loader', '--import',
+    '--cpu-prof', '--cpu-prof-dir', '--cpu-prof-name', '--cpu-prof-interval',
+    '--heap-prof', '--heap-prof-dir', '--heap-prof-name', '--heap-prof-interval',
+    '--diagnostic-dir', '--report-dir', '--report-filename', '--redirect-warnings',
+  ]);
+  // Prefix-based block: catches --inspect=addr:port, --experimental-anything, etc.
+  const BLOCKED_PREFIXES = [
+    '--inspect', '--inspect-brk', '--experimental-', '--loader=', '--import=',
+    '--cpu-prof', '--heap-prof', '--report-', '--diagnostic-',
+  ];
   for (const a of args) {
-    if (BLOCKED_FLAGS.has(a)) return `node flag "${a}" is not permitted (inline code execution / side-channel require).`;
+    if (BLOCKED_EXACT.has(a)) {
+      return `node flag "${a}" is not permitted (inline code execution, remote debugger, or profiler output).`;
+    }
+    for (const prefix of BLOCKED_PREFIXES) {
+      if (a.startsWith(prefix)) {
+        return `node flag "${a}" is not permitted — matches blocked prefix "${prefix}". Remote debugger and profiler flags are prohibited.`;
+      }
+    }
     if (!a.startsWith('-')) {
       const err = rejectSensitiveArgs([a]);
       if (err) return err;
@@ -801,6 +843,80 @@ const validateNpmArgs: ArgValidator = (args) => {
   return null;
 };
 
+// sed: block in-place modification and the e command (shell execution via GNU sed).
+// F-OP-2: sed -i promotes to RED; this validator is defense-in-depth.
+// F-OP-2: sed Xe<cmd> (e.g. 1ewhoami) and s/.../.../ e-flag both exec shell.
+const validateSedArgs: ArgValidator = (args) => {
+  for (const a of args) {
+    // Block in-place modification (also a RED pattern — defense-in-depth)
+    if (a === '-i' || a === '--in-place' || /^-[a-zA-Z]*i[a-zA-Z]*$/.test(a)) {
+      return `sed -i (in-place edit) is prohibited — use the deploy tool for file modifications.`;
+    }
+    // Block sed e command: Xe<cmd> where X is an address (digit, $, ,).
+    // Also matches bare e<cmd> (no address prefix).
+    // Pattern: arg starts with optional line-address chars then 'e' then non-whitespace.
+    if (!a.startsWith('-')) {
+      if (/^\d*[$,]?e[^\s]/.test(a)) {
+        return `sed e command is prohibited — it executes shell commands via GNU sed (e.g., "1ewhoami").`;
+      }
+      // Block substitution e-flag: s/pattern/replace/e (executes replacement as shell command).
+      // Matches the trailing flag section of a substitution: /<flags>e<flags>$/
+      if (/^s[^\s]/.test(a) && /\/[a-zA-Z]*e[a-zA-Z]*$/.test(a)) {
+        return `sed substitution e-flag is prohibited — it executes the replacement string as a shell command.`;
+      }
+    }
+  }
+  return rejectSensitiveArgs(args);
+};
+
+// grep: block recursive flags that read all files including sensitive ones.
+// F-OP-4: grep -r/-R reads .env files even though filename would block cat.
+// Route recursive search through search_file which enforces validatePath.
+//
+// Argument structure: grep [flags] <pattern> [file ...]
+// The <pattern> is a search string, NOT a file path — do NOT apply rejectSensitiveArgs to it.
+// Only file path arguments (after the first non-flag arg) need sensitive-path checking.
+const validateGrepArgs: ArgValidator = (args) => {
+  let patternConsumed = false; // first non-flag arg is the search pattern, not a file
+  for (const a of args) {
+    if (a.startsWith('-')) {
+      if (a === '-r' || a === '-R' || a === '--recursive' || a === '-d') {
+        return `grep flag "${a}" is not permitted — recursive grep reads all files including sensitive ones. Use the search_file tool for recursive search.`;
+      }
+      // Catch combined short flags: -rh, -Rh, -lrn, etc.
+      if (/^-[a-zA-Z]{2,}$/.test(a)) {
+        for (const ch of a.slice(1)) {
+          if (ch === 'r' || ch === 'R') {
+            return `grep flag "-${ch}" (from combined "${a}") enables recursive search and is not permitted.`;
+          }
+        }
+      }
+    } else {
+      if (!patternConsumed) {
+        patternConsumed = true;
+        continue; // skip pattern arg — it's a search string, not a file path
+      }
+      // File path args: check against sensitive file patterns
+      const err = rejectSensitiveArgs([a]);
+      if (err) return err;
+    }
+  }
+  return null;
+};
+
+// find: block -exec/-execdir/-ok (spawn child processes bypassing validation).
+// F-OP-3: also a RED pattern — this validator is defense-in-depth.
+// Block -fprint/-fprintf which write to attacker-chosen file paths.
+const validateFindArgs: ArgValidator = (args) => {
+  const BLOCKED_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-delete']);
+  for (const a of args) {
+    if (BLOCKED_ACTIONS.has(a)) {
+      return `find "${a}" is prohibited — it spawns child processes or writes to arbitrary paths, bypassing MCP command validation.`;
+    }
+  }
+  return rejectSensitiveArgs(args);
+};
+
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }
 const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── System info (safe read-only) ──────────────────────────────────────────
@@ -816,7 +932,7 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'lsblk':    { description: 'Block device list',        argValidator: allowFlags('-d', '-f', '-J', '-n', '-o', '--json') },
 
   // ── Process info (read-only) ──────────────────────────────────────────────
-  'ps':       { description: 'Process list',             argValidator: rejectSensitiveArgs },
+  // NOTE: 'ps' removed (F-OP-18) — ps auxe/ps -eo cmd,env dumps MCP_AUTH_TOKEN. Use get_pm2_status / get_system_health.
   'top':      { description: 'Process monitor (batch)',  argValidator: allowFlags('-b', '-n', '-1', '-d', '-u', '-p') },
   'pgrep':    { description: 'Find process by name',     argValidator: allowFlags('-l', '-a', '-x', '-n', '-o', '-u', '-f') },
   'pidof':    { description: 'Find PID by name',         argValidator: rejectSensitiveArgs },
@@ -836,12 +952,12 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'stat':     { description: 'File/dir metadata',        argValidator: rejectSensitiveArgs },
   'file':     { description: 'Detect file type',         argValidator: rejectSensitiveArgs },
   'diff':     { description: 'File comparison',          argValidator: rejectSensitiveArgs },
-  'find':     { description: 'Find files',               argValidator: rejectSensitiveArgs },
+  'find':     { description: 'Find files',               argValidator: validateFindArgs },
 
   // ── Text processing ───────────────────────────────────────────────────────
-  'grep':     { description: 'Text search',              argValidator: rejectSensitiveArgs },
-  'awk':      { description: 'Text processing (AMBER)',  argValidator: rejectSensitiveArgs },
-  'sed':      { description: 'Stream editor (AMBER)',    argValidator: rejectSensitiveArgs },
+  'grep':     { description: 'Text search (non-recursive)', argValidator: validateGrepArgs },
+  // NOTE: 'awk' removed (F-OP-1) — awk system()/getline provides full root RCE. No safe subset.
+  'sed':      { description: 'Stream editor (no -i, no e cmd)', argValidator: validateSedArgs },
   'sort':     { description: 'Sort lines',               argValidator: rejectSensitiveArgs },
   'uniq':     { description: 'Deduplicate lines',        argValidator: rejectSensitiveArgs },
   'tr':       { description: 'Translate characters',     argValidator: rejectSensitiveArgs },

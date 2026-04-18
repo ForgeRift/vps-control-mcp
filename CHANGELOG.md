@@ -6,6 +6,50 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.6.0] — 2026-04-18
+
+### Security hardening — third-pass Opus adversarial review (S47)
+
+Closes all CRITICAL/HIGH findings from the third-pass adversarial review. All changes tested against 284-test suite (all pass).
+
+**F-OP-1 (CRITICAL): awk removed from POSITIVE_ALLOWLIST**
+- `awk` removed entirely. `awk system()` and `getline` both invoke `/bin/sh -c`, providing full root RCE. No safe subset exists via argv inspection.
+
+**F-OP-2 (CRITICAL): sed e command and -i promoted to RED**
+- Added RED pattern for `sed Xe<cmd>` (line-address+e shell execution, e.g. `sed 1ewhoami`).
+- `sed -i` and `sed --in-place` promoted from AMBER to RED (arbitrary file mutation).
+- `validateSedArgs` added as defense-in-depth: rejects `-i`, `--in-place`, combined flags containing `i`, the `e` address command, and the substitution `e` flag (`s/.../.../ e`).
+
+**F-OP-3 (CRITICAL): find -exec promoted to RED**
+- `find -exec` and `find -execdir` promoted from AMBER to RED — spawns child processes that bypass all MCP command validation.
+- `validateFindArgs` added as defense-in-depth: also blocks `-ok`, `-okdir`, `-fprint`, `-fprintf`, `-delete`.
+
+**F-OP-4 (CRITICAL): grep -r/-R recursive blocked**
+- `validateGrepArgs` added: rejects `-r`, `-R`, `--recursive`, `-d`, and combined short flags containing `r`/`R`.
+- Plain single-file grep remains allowed. Route recursive search through `search_file` which enforces `validatePath`.
+
+**F-OP-5 (CRITICAL): SENSITIVE_FILE_PATTERNS .env regex tightened**
+- Old: `/\.env($|\.)/i` — missed `.env"`, `.env)`, `.env/`, `.env$IFS` suffix variants.
+- New: `/\.env(?![a-zA-Z0-9])/i` — any non-alphanumeric suffix (or end-of-string) triggers the block.
+
+**F-OP-6/7 (CRITICAL): pm2 env-dumping sub-commands blocked**
+- Removed `jlist`, `prettylist`, `describe`, `info`, `show` from `validatePm2Args` READ_ONLY set.
+- These sub-commands include the full `pm2_env` block which contains `MCP_AUTH_TOKEN` and all other secrets. Use the structured `get_pm2_status` tool instead.
+
+**F-OP-15 (LOW): CURRENT_VERSION hardcoded string corrected**
+- Fixed hardcoded `'1.3.0'` in `src/index.ts:571` to `'1.6.0'`.
+
+**F-OP-18 (CRITICAL): ps removed from POSITIVE_ALLOWLIST**
+- `ps` removed entirely. `ps auxe`, `ps -eo cmd,env`, and other env-dump flag combinations expose `MCP_AUTH_TOKEN` from the process environment. Use `get_pm2_status` or `get_system_health` instead.
+- Added belt-and-suspenders RED patterns for `ps auxe` and `ps -eo*` forms.
+
+**F-OP-19 (CRITICAL): node --inspect* blocked**
+- `validateNodeArgs` `BLOCKED_FLAGS` expanded to include: `--inspect`, `--inspect-brk`, `--inspect-port`, `--inspect-publish-uid`, `--loader`, `--experimental-loader`, `--import`, `--cpu-prof*`, `--heap-prof*`, `--diagnostic-dir`, `--report-dir`, `--report-filename`, `--redirect-warnings`.
+- Prefix-based matching added so `--inspect=0.0.0.0:9229` (flag=value form) is also blocked.
+- `node --inspect` opens a V8 debugger port to the network — root RCE if port is reachable.
+
+---
+
 ## [1.5.0] — 2026-04-18
 
 ### Security hardening — second-pass Opus adversarial review (S45)

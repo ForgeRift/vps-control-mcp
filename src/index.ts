@@ -568,7 +568,7 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-const CURRENT_VERSION = '1.3.0';
+const CURRENT_VERSION = '1.6.0';
 
 app.get('/health', async (req, res) => {
   // F-NEW-15: unauthenticated callers get a minimal response only.
