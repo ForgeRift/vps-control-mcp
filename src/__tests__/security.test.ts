@@ -16,6 +16,7 @@ import { __TEST_ONLY } from '../tools.js';
 
 const {
   validateCommand,
+  validateAgainstAllowlist,
   validatePath,
   validateProcess,
   checkAmberWarnings,
@@ -25,6 +26,7 @@ const {
   AMBER_PATTERNS,
   SENSITIVE_FILE_PATTERNS,
   CATASTROPHIC_PATTERN_SHAPES,
+  POSITIVE_ALLOWLIST,
 } = __TEST_ONLY;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -249,31 +251,40 @@ describe('Legitimate commands pass validation', () => {
   }
 });
 
-// ─── 5. AMBER tier — warning returned on dry_run, pass on confirm ────────────
+// ─── 5. AMBER tier — warning always returned; caller decides to block or prefix ──
+// checkAmberWarnings(cmd) no longer takes a dryRun param (P3c / F-NEW-1/F-NEW-4 fix).
+// The function always returns the warning text when matched; runApprovedCommand
+// decides whether to block (dry_run=true) or prepend to output (dry_run=false).
 
 describe('AMBER tier — warning flow', () => {
-  it('apt-get update returns warning on dry_run', () => {
-    const warn = checkAmberWarnings('apt-get update', true);
+  it('apt-get update always returns warning text', () => {
+    const warn = checkAmberWarnings('apt-get update');
     assert.ok(warn, 'expected a warning');
     assert.match(warn!, /WARNING/);
   });
-  it('apt-get update passes through on dry_run=false', () => {
-    const warn = checkAmberWarnings('apt-get update', false);
-    assert.equal(warn, null);
+  it('apt-get update does NOT return null (old dry_run=false pass-through removed)', () => {
+    // Regression: prior to P3c, checkAmberWarnings('...', false) returned null,
+    // silently dropping the warning. Now it always returns warning text.
+    const warn = checkAmberWarnings('apt-get update');
+    assert.notEqual(warn, null, 'warning must not be silently dropped');
   });
   it('find -exec warns', () => {
-    const warn = checkAmberWarnings('find . -exec rm {} +', true);
+    const warn = checkAmberWarnings('find . -exec rm {} +');
     // find is AMBER because of -exec, but note rm is hard-blocked by validateCommand
     // checkAmberWarnings only tests AMBER match; RED blocks would throw earlier
     assert.ok(warn);
   });
   it('xargs warns', () => {
-    const warn = checkAmberWarnings('cat list | xargs touch', true);
+    const warn = checkAmberWarnings('cat list | xargs touch');
     assert.ok(warn);
   });
   it('sed -i warns', () => {
-    const warn = checkAmberWarnings('sed -i "s/foo/bar/" file', true);
+    const warn = checkAmberWarnings('sed -i "s/foo/bar/" file');
     assert.ok(warn);
+  });
+  it('non-AMBER command returns null', () => {
+    const warn = checkAmberWarnings('ps aux');
+    assert.equal(warn, null);
   });
 });
 
@@ -312,7 +323,7 @@ describe('validatePath — allowlist', () => {
     assert.throws(() => validatePath('/etc/passwd'), /Path not permitted|not found/);
   });
   it('rejects /root/.ssh/id_rsa', () => {
-    assert.throws(() => validatePath('/root/.ssh/id_rsa'), /Path not permitted|BLOCKED|not found/);
+    assert.throws(() => validatePath('/root/.ssh/id_rsa'), /Path not permitted|BLOCKED|not found|EACCES|permission denied/);
   });
   it('rejects relative path escape via ..', () => {
     assert.throws(() => validatePath('/root/sharpedge/../../etc/passwd'), /Path not permitted|not found/);
@@ -451,5 +462,131 @@ describe('False-positive guards (common devops idioms stay allowed)', () => {
   });
   it('"concatenation" is allowed in echo', () => {
     expectAllowed('echo "concatenation"');
+  });
+});
+
+// ─── 13. Positive allowlist (P3c / F-NEW-3) ──────────────────────────────────
+
+describe('validateAgainstAllowlist — default-deny', () => {
+  // helper: wraps throws check for allowlist
+  function expectAllowlisted(cmd: string) {
+    assert.doesNotThrow(() => validateAgainstAllowlist(cmd), `expected "${cmd}" to be on allowlist`);
+  }
+  function expectNotAllowlisted(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[not-allowlisted\]/, `expected "${cmd}" to be blocked by allowlist`);
+  }
+  function expectInvalidArgs(cmd: string) {
+    assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/, `expected "${cmd}" to be blocked by arg validator`);
+  }
+
+  // ── Allowlisted binaries pass ────────────────────────────────────────────
+  it('df -h passes', () => expectAllowlisted('df -h'));
+  it('free -h passes', () => expectAllowlisted('free -h'));
+  it('ps aux passes', () => expectAllowlisted('ps aux'));
+  it('ls /root/sharpedge passes', () => expectAllowlisted('ls /root/sharpedge'));
+  it('cat /root/sharpedge/out.log passes', () => expectAllowlisted('cat /root/sharpedge/out.log'));
+  it('tail -n 50 /root/sharpedge/out.log passes', () => expectAllowlisted('tail -n 50 /root/sharpedge/out.log'));
+  it('grep error /root/sharpedge/out.log passes', () => expectAllowlisted('grep error /root/sharpedge/out.log'));
+  it('pm2 status passes', () => expectAllowlisted('pm2 status'));
+  it('pm2 logs passes', () => expectAllowlisted('pm2 logs'));
+  it('echo hello passes', () => expectAllowlisted('echo hello'));
+  it('which node passes', () => expectAllowlisted('which node'));
+  it('node --version passes', () => expectAllowlisted('node --version'));
+  it('pnpm audit passes', () => expectAllowlisted('pnpm audit'));
+  it('npm outdated passes', () => expectAllowlisted('npm outdated'));
+  it('uptime passes', () => expectAllowlisted('uptime'));
+  it('date passes', () => expectAllowlisted('date'));
+  it('ss -tulpn passes', () => expectAllowlisted('ss -tulpn'));
+  it('du -sh /root/sharpedge passes', () => expectAllowlisted('du -sh /root/sharpedge'));
+
+  // ── Non-allowlisted binaries are blocked ─────────────────────────────────
+  it('less is not on allowlist', () => expectNotAllowlisted('less /etc/passwd'));
+  it('more is not on allowlist', () => expectNotAllowlisted('more /etc/passwd'));
+  it('python3 is not on allowlist', () => expectNotAllowlisted('python3 -c "import os"'));
+  it('bash is not on allowlist', () => expectNotAllowlisted('bash -c id'));
+  it('curl is not on allowlist', () => expectNotAllowlisted('curl http://example.com'));
+  it('wget is not on allowlist', () => expectNotAllowlisted('wget http://example.com'));
+  it('xxd is not on allowlist', () => expectNotAllowlisted('xxd /etc/shadow'));
+  it('strings is not on allowlist', () => expectNotAllowlisted('strings /root/.env'));
+  it('hexdump is not on allowlist', () => expectNotAllowlisted('hexdump /root/.env'));
+  it('od is not on allowlist', () => expectNotAllowlisted('od /root/.env'));
+  it('nl is not on allowlist', () => expectNotAllowlisted('nl /etc/passwd'));
+  it('tac is not on allowlist', () => expectNotAllowlisted('tac /etc/shadow'));
+  it('rev is not on allowlist', () => expectNotAllowlisted('rev /etc/shadow'));
+  it('base64 is not on allowlist', () => expectNotAllowlisted('base64 /root/.env'));
+  it('awk blocked for non-allowlisted use', () => {
+    // awk IS on the allowlist, but /etc/shadow is sensitive — test the arg validator
+    expectInvalidArgs('awk NR==1 /etc/shadow');
+  });
+
+  // ── Path-qualified binary names are blocked ───────────────────────────────
+  it('/bin/cat is blocked (path-qualified)', () => {
+    assert.throws(() => validateAgainstAllowlist('/bin/cat /root/sharpedge/out.log'), /BLOCKED \[not-allowlisted\]/);
+  });
+  it('/usr/bin/python3 is blocked (path-qualified)', () => {
+    assert.throws(() => validateAgainstAllowlist('/usr/bin/python3 -c "import os"'), /BLOCKED \[not-allowlisted\]/);
+  });
+  it('../../../bin/cat is blocked (traversal-qualified)', () => {
+    assert.throws(() => validateAgainstAllowlist('../../../bin/cat /etc/shadow'), /BLOCKED \[not-allowlisted\]/);
+  });
+
+  // ── pm2 sub-command allowlist ─────────────────────────────────────────────
+  it('pm2 restart is blocked (use restart_process tool)', () => {
+    expectInvalidArgs('pm2 restart all');
+  });
+  it('pm2 delete is blocked', () => {
+    expectInvalidArgs('pm2 delete vps-mcp');
+  });
+  it('pm2 start is blocked', () => {
+    expectInvalidArgs('pm2 start app.js');
+  });
+
+  // ── node arg validator ────────────────────────────────────────────────────
+  it('node -e "code" is blocked', () => {
+    expectInvalidArgs('node -e "require(\'child_process\').exec(\'id\')"');
+  });
+  it('node --eval is blocked', () => {
+    expectInvalidArgs('node --eval "process.exit(0)"');
+  });
+  it('node script.js passes', () => expectAllowlisted('node script.js'));
+
+  // ── npm/pnpm sub-command allowlist ────────────────────────────────────────
+  it('npm install is blocked', () => {
+    expectInvalidArgs('npm install malicious-pkg');
+  });
+  it('pnpm install is blocked', () => {
+    expectInvalidArgs('pnpm install malicious-pkg');
+  });
+  it('npm run is blocked', () => {
+    expectInvalidArgs('npm run arbitrary-script');
+  });
+
+  // ── Sensitive-file arg rejection on allowlisted binaries ─────────────────
+  it('cat .env is blocked by arg validator', () => {
+    expectInvalidArgs('cat /root/sharpedge/.env');
+  });
+  it('tail .env is blocked by arg validator', () => {
+    expectInvalidArgs('tail -f /root/sharpedge/.env.production');
+  });
+  it('head credentials.json is blocked by arg validator', () => {
+    expectInvalidArgs('head /root/sharpedge/credentials.json');
+  });
+
+  // ── Structural health ─────────────────────────────────────────────────────
+  it('POSITIVE_ALLOWLIST has at least 20 entries', () => {
+    assert.ok(Object.keys(POSITIVE_ALLOWLIST).length >= 20,
+      `only ${Object.keys(POSITIVE_ALLOWLIST).length} allowlist entries`);
+  });
+  it('every allowlist entry has a description', () => {
+    for (const [bin, entry] of Object.entries(POSITIVE_ALLOWLIST)) {
+      assert.ok(entry.description && typeof entry.description === 'string',
+        `missing description on allowlist entry for "${bin}"`);
+    }
+  });
+  it('every allowlist entry has an argValidator function', () => {
+    for (const [bin, entry] of Object.entries(POSITIVE_ALLOWLIST)) {
+      assert.equal(typeof entry.argValidator, 'function',
+        `missing argValidator on allowlist entry for "${bin}"`);
+    }
   });
 });

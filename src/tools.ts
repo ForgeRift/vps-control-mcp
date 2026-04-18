@@ -621,9 +621,9 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
 
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
 // These commands are sometimes legitimate but carry risk. When matched:
-// - dry_run is forced to true
-// - A structured warning is returned with the command, risk, and ToS notice
-// - The user must re-call with dry_run=false to execute
+// - dry_run=true: warning returned, execution blocked — user must re-call with dry_run=false
+// - dry_run=false: warning prepended to command output (F-NEW-1/F-NEW-4 fix)
+//   Prior versions silently dropped the warning for dry_run=false calls.
 
 interface AmberWarning { pattern: RegExp; risk: string; }
 const AMBER_PATTERNS: AmberWarning[] = [
@@ -672,28 +672,237 @@ function validateCommand(command: string): void {
   }
 }
 
-function checkAmberWarnings(command: string, dryRun: boolean): string | null {
+// Returns the AMBER warning text if any pattern matches, null otherwise.
+// The CALLER decides whether to block (dry_run=true) or prepend to output (dry_run=false).
+// This ensures the warning is never silently dropped (F-NEW-1/F-NEW-4).
+function checkAmberWarnings(command: string): string | null {
   for (const { pattern, risk } of AMBER_PATTERNS) {
     if (pattern.test(command)) {
-      if (dryRun) {
-        return (
-          `⚠️  WARNING — This command requires explicit confirmation.\n` +
-          `Command: ${command}\n` +
-          `Risk: ${risk}\n` +
-          `\n` +
-          `By proceeding with dry_run=false you acknowledge:\n` +
-          `  • You understand the risk described above\n` +
-          `  • You accept responsibility for the outcome\n` +
-          `  • Misuse may violate the Terms of Service\n` +
-          `\n` +
-          `Call again with dry_run=false to execute.`
-        );
-      }
-      // If dry_run=false, let it through (user confirmed)
-      return null;
+      return (
+        `⚠️  AMBER WARNING — This command matched a risk pattern.\n` +
+        `Command: ${command}\n` +
+        `Risk: ${risk}\n` +
+        `\n` +
+        `By proceeding with dry_run=false you acknowledge:\n` +
+        `  • You understand the risk described above\n` +
+        `  • You accept responsibility for the outcome\n` +
+        `  • Misuse may violate the Terms of Service\n` +
+        `\n` +
+        `Call again with dry_run=false to execute.`
+      );
     }
   }
   return null;
+}
+
+// ─── Positive Allowlist for run_approved_command (P3c / F-NEW-3) ──────────────
+//
+// Default-deny: any binary not explicitly listed below is hard-blocked.
+// This closes the ~30 file-reader problem — if a binary is not on this list,
+// it cannot be executed regardless of what RED/AMBER patterns do or don't cover.
+//
+// Per-binary argValidator functions return:
+//   null   → args acceptable
+//   string → human-readable error message (will be thrown as BLOCKED [invalid-args])
+
+type ArgValidator = (args: string[]) => string | null;
+
+// Rejects any arg that matches SENSITIVE_FILE_PATTERNS (path-like args).
+const rejectSensitiveArgs: ArgValidator = (args) => {
+  for (const arg of args) {
+    if (SENSITIVE_FILE_PATTERNS.some(p => p.test(arg))) {
+      return `Argument "${arg}" matches a sensitive file pattern and is not permitted.`;
+    }
+  }
+  return null;
+};
+
+// Allows everything — used for truly safe read-only commands.
+const allowAny: ArgValidator = (_args) => null;
+
+// Allows only an explicit set of flag strings; non-flag args go through sensitive check.
+// Handles combined short flags (e.g. -tulpn) by expanding to individual chars before checking.
+function allowFlags(...permitted: string[]): ArgValidator {
+  const set = new Set(permitted);
+  return (args) => {
+    for (const a of args) {
+      if (a.startsWith('-')) {
+        if (!set.has(a)) {
+          // Try expanding combined short flags: -tulpn → -t, -u, -l, -p, -n
+          if (/^-[a-zA-Z]{2,}$/.test(a)) {
+            for (const ch of a.slice(1)) {
+              if (!set.has(`-${ch}`)) {
+                return `Flag "-${ch}" (from combined "${a}") is not permitted for this command. Allowed: ${[...set].join(', ')}.`;
+              }
+            }
+          } else {
+            return `Flag "${a}" is not permitted for this command. Allowed: ${[...set].join(', ')}.`;
+          }
+        }
+      } else {
+        const err = rejectSensitiveArgs([a]);
+        if (err) return err;
+      }
+    }
+    return null;
+  };
+}
+
+// pm2: only read-only sub-commands. restart/delete/start are handled by restart_process.
+const validatePm2Args: ArgValidator = (args) => {
+  const READ_ONLY = new Set([
+    'status', 'list', 'ls', 'jlist', 'prettylist',
+    'describe', 'info', 'show', 'logs', 'monit',
+    'id', 'version', '--version', '-v', 'flush',
+  ]);
+  const sub = args[0];
+  if (!sub) return null;
+  if (!READ_ONLY.has(sub)) {
+    return `pm2 sub-command "${sub}" is not permitted. ` +
+      `Allowed read-only sub-commands: ${[...READ_ONLY].join(', ')}. ` +
+      `Use restart_process tool for pm2 restart/start/stop/delete.`;
+  }
+  return null;
+};
+
+// node: block inline-eval flags; allow script paths (with sensitive check).
+const validateNodeArgs: ArgValidator = (args) => {
+  const BLOCKED_FLAGS = new Set(['-e', '--eval', '-p', '--print', '--input-type', '--require', '-r']);
+  for (const a of args) {
+    if (BLOCKED_FLAGS.has(a)) return `node flag "${a}" is not permitted (inline code execution / side-channel require).`;
+    if (!a.startsWith('-')) {
+      const err = rejectSensitiveArgs([a]);
+      if (err) return err;
+    }
+  }
+  return null;
+};
+
+// pnpm: read-only sub-commands only.
+const validatePnpmArgs: ArgValidator = (args) => {
+  const ALLOWED = new Set(['audit', 'list', 'ls', 'outdated', 'view', 'info', 'why', 'root', 'bin', '--version', '-v', 'licenses']);
+  const sub = args[0];
+  if (!sub) return null;
+  if (!ALLOWED.has(sub)) {
+    return `pnpm sub-command "${sub}" is not permitted. Allowed: ${[...ALLOWED].join(', ')}.`;
+  }
+  return null;
+};
+
+// npm: read-only sub-commands only.
+const validateNpmArgs: ArgValidator = (args) => {
+  const ALLOWED = new Set(['audit', 'list', 'ls', 'outdated', 'view', 'info', 'why', 'explain', 'root', 'bin', '--version', '-v']);
+  const sub = args[0];
+  if (!sub) return null;
+  if (!ALLOWED.has(sub)) {
+    return `npm sub-command "${sub}" is not permitted. Allowed: ${[...ALLOWED].join(', ')}.`;
+  }
+  return null;
+};
+
+interface AllowlistEntry { description: string; argValidator: ArgValidator; }
+const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
+  // ── System info (safe read-only) ──────────────────────────────────────────
+  'df':       { description: 'Disk space report',        argValidator: allowFlags('-h', '-H', '-k', '-m', '-T', '-i', '--total', '-l', '-t', '-x') },
+  'free':     { description: 'Memory info',              argValidator: allowFlags('-h', '-m', '-g', '-k', '-s', '-t', '-w', '-c') },
+  'uptime':   { description: 'System uptime',            argValidator: allowFlags('-p', '-s') },
+  'uname':    { description: 'Kernel/OS info',           argValidator: allowFlags('-a', '-r', '-s', '-m', '-n', '-v', '-o') },
+  'whoami':   { description: 'Current user',             argValidator: allowAny },
+  'id':       { description: 'User/group identity',      argValidator: allowFlags('-u', '-g', '-G', '-n', '-r') },
+  'date':     { description: 'Current date/time',        argValidator: allowAny },
+  'hostname': { description: 'Hostname',                 argValidator: allowFlags('-f', '-s', '-d', '-i') },
+  'lscpu':    { description: 'CPU info',                 argValidator: allowFlags('-J', '--json', '-e', '-p') },
+  'lsblk':    { description: 'Block device list',        argValidator: allowFlags('-d', '-f', '-J', '-n', '-o', '--json') },
+
+  // ── Process info (read-only) ──────────────────────────────────────────────
+  'ps':       { description: 'Process list',             argValidator: rejectSensitiveArgs },
+  'top':      { description: 'Process monitor (batch)',  argValidator: allowFlags('-b', '-n', '-1', '-d', '-u', '-p') },
+  'pgrep':    { description: 'Find process by name',     argValidator: allowFlags('-l', '-a', '-x', '-n', '-o', '-u', '-f') },
+  'pidof':    { description: 'Find PID by name',         argValidator: rejectSensitiveArgs },
+  'lsof':     { description: 'List open files',          argValidator: allowFlags('-i', '-p', '-u', '-n', '-P', '-t', '-c', '-a', '-l', '-s') },
+
+  // ── Network info (read-only) ──────────────────────────────────────────────
+  'ss':       { description: 'Socket statistics',        argValidator: allowFlags('-t', '-u', '-l', '-p', '-n', '-a', '-4', '-6', '-r', '-e', '-o', '-s', '-i') },
+  'netstat':  { description: 'Network statistics',       argValidator: allowFlags('-t', '-u', '-l', '-p', '-n', '-a', '-4', '-6', '-r', '-e', '-i', '-s') },
+
+  // ── File reading (restricted to non-sensitive paths) ──────────────────────
+  'cat':      { description: 'Read file',                argValidator: rejectSensitiveArgs },
+  'head':     { description: 'First N lines of file',    argValidator: rejectSensitiveArgs },
+  'tail':     { description: 'Last N lines / follow log',argValidator: rejectSensitiveArgs },
+  'wc':       { description: 'Word/line/byte count',     argValidator: rejectSensitiveArgs },
+  'ls':       { description: 'List directory',           argValidator: rejectSensitiveArgs },
+  'du':       { description: 'Disk usage per path',      argValidator: rejectSensitiveArgs },
+  'stat':     { description: 'File/dir metadata',        argValidator: rejectSensitiveArgs },
+  'file':     { description: 'Detect file type',         argValidator: rejectSensitiveArgs },
+  'diff':     { description: 'File comparison',          argValidator: rejectSensitiveArgs },
+  'find':     { description: 'Find files',               argValidator: rejectSensitiveArgs },
+
+  // ── Text processing ───────────────────────────────────────────────────────
+  'grep':     { description: 'Text search',              argValidator: rejectSensitiveArgs },
+  'awk':      { description: 'Text processing (AMBER)',  argValidator: rejectSensitiveArgs },
+  'sed':      { description: 'Stream editor (AMBER)',    argValidator: rejectSensitiveArgs },
+  'sort':     { description: 'Sort lines',               argValidator: rejectSensitiveArgs },
+  'uniq':     { description: 'Deduplicate lines',        argValidator: rejectSensitiveArgs },
+  'tr':       { description: 'Translate characters',     argValidator: rejectSensitiveArgs },
+  'cut':      { description: 'Cut fields',               argValidator: rejectSensitiveArgs },
+  'paste':    { description: 'Merge files/lines',        argValidator: rejectSensitiveArgs },
+  'jq':       { description: 'JSON processor',           argValidator: rejectSensitiveArgs },
+
+  // ── PM2 (read-only — restart via structured tool) ────────────────────────
+  'pm2':      { description: 'PM2 process manager',      argValidator: validatePm2Args },
+
+  // ── Node.js (no inline eval) ──────────────────────────────────────────────
+  'node':     { description: 'Node.js runtime',          argValidator: validateNodeArgs },
+
+  // ── Package managers (read-only ops) ─────────────────────────────────────
+  'pnpm':     { description: 'pnpm (read ops only)',     argValidator: validatePnpmArgs },
+  'npm':      { description: 'npm (read ops only)',      argValidator: validateNpmArgs },
+
+  // ── Safe utilities ────────────────────────────────────────────────────────
+  'echo':     { description: 'Print text',               argValidator: allowAny },
+  'printf':   { description: 'Formatted print',          argValidator: allowAny },
+  'which':    { description: 'Find binary path',         argValidator: allowAny },
+  'type':     { description: 'Command type',             argValidator: allowAny },
+};
+
+function validateAgainstAllowlist(command: string): void {
+  const parts = command.trim().split(/\s+/);
+  const rawBinary = parts[0];
+  const args = parts.slice(1);
+
+  // Reject path-qualified binary names — e.g. /usr/bin/python bypasses the name lookup.
+  // Only bare binary names (no / or \) are permitted.
+  if (rawBinary.includes('/') || rawBinary.includes('\\')) {
+    throw new Error(
+      `⛔ BLOCKED [not-allowlisted]: Path-qualified binary names are not permitted.\n` +
+      `Use the bare binary name (e.g., "cat" not "/bin/cat").\n` +
+      `Command: ${command}\n` +
+      `This restriction cannot be overridden.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
+
+  const entry = POSITIVE_ALLOWLIST[rawBinary];
+  if (!entry) {
+    const allowed = Object.keys(POSITIVE_ALLOWLIST).sort().join(', ');
+    throw new Error(
+      `⛔ BLOCKED [not-allowlisted]: "${rawBinary}" is not on the approved command list.\n` +
+      `Command: ${command}\n` +
+      `Approved binaries: ${allowed}\n` +
+      `This restriction cannot be overridden. Run unlisted commands directly on the server via SSH.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
+
+  const argError = entry.argValidator(args);
+  if (argError) {
+    throw new Error(
+      `⛔ BLOCKED [invalid-args]: ${argError}\n` +
+      `Command: ${command}\n` +
+      `This restriction cannot be overridden.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
 }
 
 // ─── Tool Implementations ─────────────────────────────────────────────────────
@@ -897,6 +1106,11 @@ async function runApprovedCommand(
   // Length caps before any work (F-VM-3)
   capString(justification ?? '', INPUT_LIMITS.justification, 'justification');
 
+  // Allowlist check — default-deny any binary not explicitly permitted (P3c / F-NEW-3).
+  // Runs BEFORE RED patterns so the error message is actionable ("not on allowlist")
+  // rather than confusingly silent for binaries the denylist simply doesn't cover.
+  validateAgainstAllowlist(command);
+
   // RED tier — hard block (throws on match). capString on command runs inside.
   validateCommand(command);
 
@@ -904,9 +1118,12 @@ async function runApprovedCommand(
     throw new Error('justification must be at least 10 characters explaining why structured tools are insufficient.');
   }
 
-  // AMBER tier — warning system
-  const amberWarning = checkAmberWarnings(command, dryRun);
-  if (amberWarning) return amberWarning;
+  // AMBER tier — warning system (F-NEW-1/F-NEW-4 fix)
+  // checkAmberWarnings now always returns the warning text when matched.
+  // dry_run=true  → block execution, return warning
+  // dry_run=false → execute, prepend warning to output so it is never silently dropped
+  const amberWarning = checkAmberWarnings(command);
+  if (amberWarning && dryRun) return amberWarning;
 
   if (dryRun) {
     return [
@@ -932,9 +1149,14 @@ async function runApprovedCommand(
   // Increment before branching — both sync and async paths consume one quota slot
   customCommandCount++;
 
+  // AMBER prefix — attached to actual output so the warning is never silently dropped
+  const amberPrefix = amberWarning
+    ? `[AMBER — confirmed by dry_run=false]\n${amberWarning}\n\n--- Command output follows ---\n`
+    : '';
+
   if (runInBackground) {
     const jobId = startBackgroundJob(command);
-    return [
+    return amberPrefix + [
       `Background job started: ${jobId}`,
       `Command: ${command}`,
       '',
@@ -948,7 +1170,7 @@ async function runApprovedCommand(
   try {
     const { stdout, stderr } = await exec(cmd, args, { timeout: COMMAND_TIMEOUT_MS });
     const output = [stdout, stderr].filter(Boolean).join('\n');
-    return truncate(output.trim() || '[Command completed with no output]');
+    return amberPrefix + truncate(output.trim() || '[Command completed with no output]');
   } catch (err) {
     const e = err as Error & { killed?: boolean; signal?: string };
     if (e.killed || e.signal === 'SIGTERM') {
@@ -1381,6 +1603,7 @@ export async function executeTool(
 // production code — use executeTool() as the stable API surface.
 export const __TEST_ONLY = {
   validateCommand,
+  validateAgainstAllowlist,
   validatePath,
   validateProcess,
   checkAmberWarnings,
@@ -1390,4 +1613,5 @@ export const __TEST_ONLY = {
   AMBER_PATTERNS,
   SENSITIVE_FILE_PATTERNS,
   CATASTROPHIC_PATTERN_SHAPES,
+  POSITIVE_ALLOWLIST,
 };
