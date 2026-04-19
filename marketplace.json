@@ -1,0 +1,14 @@
+{
+  "plugins": [
+    {
+      "id": "vps-control",
+      "name": "VPS Control",
+      "description": "Connect Claude to your remote Linux VPS via MCP — run commands, inspect PM2 logs, restart processes, and manage the server from Cowork. Cloud-agnostic (DigitalOcean, Linode, AWS EC2, any Linux host).",
+      "source": {
+        "type": "github",
+        "repo": "forgerift/vps-control-mcp",
+        "ref": "main"
+      }
+    }
+  ]
+}
