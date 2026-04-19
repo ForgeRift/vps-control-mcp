@@ -1119,3 +1119,53 @@ describe('F-OP-45 git hardening flags (sixth-pass F-LT-60)', () => {
     }
   });
 });
+
+
+// ─── F-OP-46 (S55) — audit.ts sanitizeArgs parity with LT F-LT-85 ─────────────
+// Audit log is in the trust boundary: secret values must be redacted before they
+// land in audit.log. Mirrors local-terminal-mcp's F-LT-85 expansion. Asserts via
+// source-level regex checks (same pattern as LT F-LT-51) so we don't need to
+// export module-private sanitizeArgs.
+
+describe('F-OP-46 — audit.ts uses expanded SECRET_VALUE_PREFIXES + expanded key-name regex', () => {
+  it('audit.ts source contains expanded SECRET_VALUE_PREFIXES list', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('../audit.ts', import.meta.url)), 'utf8');
+    assert.match(src, /SECRET_VALUE_PREFIXES/, 'audit.ts must define SECRET_VALUE_PREFIXES');
+    // Canonical tokens from the expanded list — any regression deleting these will fail the test.
+    for (const marker of [
+      'ghp_', 'gho_', 'github_pat_', 'xox', 'glpat-', 'AKIA', 'ASIA', 'AIza',
+      'pk_live_', 'sk_live_', 'whsec_', 'SG\\.', 'ATATT', 'do_v1_',
+      'ya29\\.', 'npm_', '-----BEGIN ',
+    ]) {
+      assert.ok(
+        src.includes(marker),
+        `audit.ts SECRET_VALUE_PREFIXES missing expected marker: ${marker}`
+      );
+    }
+  });
+
+  it('audit.ts source contains expanded key-name regex (credential|bearer|api_key|cookie|session)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('../audit.ts', import.meta.url)), 'utf8');
+    // Expanded key-name regex must include these terms beyond the original token|secret|key|password|auth.
+    for (const kw of ['credential', 'bearer', 'api[_-]?key', 'cookie', 'session']) {
+      assert.ok(
+        src.includes(kw),
+        `audit.ts sanitizeArgs key-name regex missing expected keyword: ${kw}`
+      );
+    }
+  });
+
+  it('audit.ts does NOT still use only the narrow /^sk-|^Bearer |^eyJ/ regex alone', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('../audit.ts', import.meta.url)), 'utf8');
+    // The pre-S55 form was exactly /^sk-|^Bearer |^eyJ/i.test(v). If that is the ONLY
+    // value-prefix check, parity has regressed.
+    const narrowOnly = /\/\^sk-\|\^Bearer \|\^eyJ\/i\.test\(v\)\s*\n\s*\)\s*\)/;
+    assert.doesNotMatch(src, narrowOnly, 'audit.ts must not use narrow-only prefix regex');
+  });
+});

@@ -32,12 +32,17 @@ export function auditLog(
 }
 
 // Strip values that look like secrets before logging args
+// F-OP-46 (S55): expanded token-shape list + expanded key-name regex to match
+// local-terminal-mcp F-LT-85 (S54). Audit log is in the trust boundary; missing a
+// token prefix here means a secret survives in plaintext in audit.log even though
+// tools.ts scrubs it from tool output.
+const SECRET_VALUE_PREFIXES = /^(?:sk-|Bearer |eyJ|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xox[abprs]-|xoxe\.xox[bp]-|glpat-|sbp_|supabase_svcRole_|AKIA|ASIA|AIza|pk_live_|pk_test_|sk_live_|sk_test_|rk_live_|rk_test_|whsec_|SG\.|ATATT|ATCTT|do_v1_|dop_v1_|dockercfg\.|sq0[ac][st]p-|key-[0-9a-f]{32}|ya29\.|1\/\/|AC[a-z0-9]{32}|npm_[A-Za-z0-9]{36}|-----BEGIN )/i;
 function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) {
     if (typeof v === 'string' && (
-      /token|secret|key|password|auth/i.test(k) ||
-      /^sk-|^Bearer |^eyJ/i.test(v)
+      /token|secret|key|password|auth|credential|bearer|api[_-]?key|cookie|session/i.test(k) ||
+      SECRET_VALUE_PREFIXES.test(v)
     )) {
       clean[k] = '[REDACTED]';
     } else {
