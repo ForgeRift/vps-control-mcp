@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+*.log
+deploy-jobs.json
+.mcp.json
+.commit-msg.txt
+!.env.test
+
+# Transient test/build output
+test-out.txt
+test-baseline.txt
+tsc-out.txt
