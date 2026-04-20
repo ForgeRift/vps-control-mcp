@@ -1,0 +1,25 @@
+{
+  "name": "vps-control",
+  "version": "1.8.4",
+  "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 100+ hard-blocked patterns, default-deny binary allowlist, sensitive file protection, full PKCE OAuth 2.0, rate limiting, and audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
+  "author": {
+    "name": "ForgeRift LLC",
+    "email": "support@forgerift.io"
+  },
+  "repository": "https://github.com/forgerift/vps-control-mcp",
+  "hooks": "./hooks/hooks.json",
+  "keywords": [
+    "vps",
+    "ssh",
+    "digitalocean",
+    "linux",
+    "pm2",
+    "deploy",
+    "server",
+    "remote",
+    "node",
+    "security",
+    "oauth",
+    "audit"
+  ]
+}
