@@ -52,6 +52,31 @@ function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
   return clean;
 }
 
+// Log a confirmed deploy event — one entry per confirmed deploy invocation (ToS §8 + §B.2).
+export function logDeployConfirmation(
+  tool: string,
+  description: string,
+  target: string
+): void {
+  const entry = {
+    ts:          new Date().toISOString(),
+    event:       'deploy-confirmation',
+    tool,
+    description: description.slice(0, 200),
+    target,
+    confirmed:   true,
+  };
+
+  const line = JSON.stringify(entry) + '\n';
+  try {
+    rotateIfNeeded();
+    fs.appendFileSync(CONFIG.AUDIT_LOG_PATH, line, { flag: 'a' });
+  } catch {
+    console.error('[AUDIT FAIL — deploy confirmation]', line.trim());
+  }
+  console.log(`[audit] ✓ DEPLOY CONFIRMED — ${tool}: ${description.slice(0, 60)}`);
+}
+
 // Simple rotation: when the log exceeds MAX_AUDIT_BYTES, rename to .old and start fresh.
 // Keeps exactly one backup. Checked at most once per 60 seconds to avoid stat() on every call.
 let lastRotationCheck = 0;

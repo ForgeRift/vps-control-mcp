@@ -6,6 +6,46 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.9.0] — 2026-04-21
+
+### S59 pre-publication hardening — BLOCKED tier, deploy gating, OAuth deactivation, CVSS SLA
+
+**BLOCKED tier: Three-layer pipeline for unrecoverable operations (ToS §8)**
+
+A new BLOCKED tier sits above RED. Any command matching one of 11 static pattern categories is refused before execution with a structured error message and manual-steps guidance. If `ANTHROPIC_API_KEY` is set, Layer 2 (AI pre-classification via `claude-haiku-4-5`) and Layer 3 (multi-persona adversarial safety board) run in parallel for every `run_approved_command` call. All three layer verdicts are written to the audit log regardless of outcome. Layers 2 and 3 fail-open if the API key is unset — Layer 1 (static patterns) always runs.
+
+Blocked categories:
+1. Recursive / bulk file deletion (`rm -r`, `find -delete`, `rsync --delete`)
+2. Redirect / truncation overwrite (`truncate -s 0`, `cat /dev/null >`)
+3. Destructive git history rewrite (`--force`, `--mirror`, `filter-branch`, `+` prefix push)
+4. Database destruction (`DROP DATABASE/TABLE`, `TRUNCATE TABLE`, `DELETE FROM` without WHERE, `FLUSHALL`)
+5. Disk-level write operations (`mkfs`, `wipefs`, `dd if=/dev/zero`, `blkdiscard`)
+6. System power-state changes (`poweroff`, `halt`, `systemctl reboot`, `kill -9 1`)
+7. Credential / key material destruction (`rm`/`shred` of `.pem`, `.ssh/`, `/etc/shadow`)
+8. OS permission / user destruction (`chmod -R 000`, `chown -R /`, `visudo`)
+9. Firewall / network security destruction (`iptables -F`, `ufw disable`, `setenforce 0`)
+10. Audit log / evidence destruction (`rm /var/log/`, `history -c`, `unset HISTFILE`)
+11. Container / orchestration nuclear (`docker system prune -af`, `kubectl delete --all`)
+
+**Deploy gated confirmation (ToS §8 + §B.2)**
+
+`deploy` and `deploy_vps_mcp` now require `confirm=true` per invocation. Without it, a detailed confirmation prompt is returned showing the target directory, last git commit, description, and the exact step list. Session-level consent is not accepted — each call requires explicit confirmation. Confirmed deploys are written to the audit log via `logDeployConfirmation` (new export from `audit.ts`).
+
+**OAuth deactivation in `uninstall.sh` (ToS §14.2)**
+
+Added section 3 to the uninstall script. If `.oauth-client.json` is present, the script extracts the `client_id`, optionally POSTs a revocation request to `$OAUTH_REVOCATION_ENDPOINT`, and removes the local config file. Instructs users to contact support if the endpoint is not configured. DNS/sslip.io cleanup guidance added as section 4.
+
+**CVSS patch SLA process doc (ToS §A.3)**
+
+Created `docs/CVSS_PATCH_SLA.md` — internal process document defining the 72-hour (CVSS 9+) and 30-day (CVSS 7–8.9) patch SLA, the monitoring stack (npm audit + Dependabot), triage/patch/release/document steps, and escalation path.
+
+**Package and config**
+- `@anthropic-ai/sdk: ^0.38.0` added to `dependencies` (used by BLOCKED-tier Layers 2 and 3)
+- `ANTHROPIC_API_KEY` added to `.env.example`
+- Version bumped from 1.8.4 → 1.9.0
+
+---
+
 ## [1.8.4] — 2026-04-19
 
 ### Token frugality patch — Policy §5.B alignment (S58)
