@@ -673,12 +673,14 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bdpkg\s+-i\b/,           category: 'pkg-install',     reason: 'Package installation is prohibited.' },
   { pattern: /\byum\s+install\b/,       category: 'pkg-install',     reason: 'Package installation is prohibited.' },
   { pattern: /\bdnf\s+install\b/,       category: 'pkg-install',     reason: 'Package installation is prohibited.' },
-  { pattern: /\bpip\s+install\b/,       category: 'pkg-install',     reason: 'pip install is prohibited (arbitrary code execution via setup.py).' },
+  { pattern: /\bpip[23]?\s+install\b/,  category: 'pkg-install',     reason: 'pip/pip2/pip3 install is prohibited (arbitrary code execution via setup.py).' },
   { pattern: /\bnpm\s+install\b/,       category: 'pkg-install',     reason: 'npm install is prohibited (arbitrary code execution via install scripts). Use the deploy tool.' },
   { pattern: /\bnpx\b/,                 category: 'pkg-install',     reason: 'npx is prohibited (remote code execution).' },
   { pattern: /\bapt-get\s+remove\b/,    category: 'pkg-remove',      reason: 'Package removal is prohibited.' },
   { pattern: /\bapt-get\s+purge\b/,     category: 'pkg-remove',      reason: 'Package purge is prohibited.' },
   { pattern: /\bapt\s+remove\b/,        category: 'pkg-remove',      reason: 'Package removal is prohibited.' },
+  { pattern: /\bapt(?:-get)?\s+upgrade\b/, category: 'pkg-install',   reason: 'apt upgrade is prohibited (could install compromised packages).' },
+  { pattern: /\bapt(?:-get)?\s+dist-upgrade\b/, category: 'pkg-install', reason: 'apt dist-upgrade is prohibited.' },
 
   // --- Container escape ---
   { pattern: /\bdocker\b/,              category: 'container',        reason: 'Docker commands are prohibited.' },
@@ -693,6 +695,8 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bln\s+-s/,              category: 'file-write',       reason: 'Symlink creation is prohibited.' },
   { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Copying to system directories is prohibited.' },
   { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Moving to system directories is prohibited.' },
+  { pattern: /\bsed\s+.*(?:-i|--in-place)\b/, category: 'file-write', reason: 'sed in-place editing (-i) is prohibited (direct file modification).' },
+  { pattern: /\bawk\b.*>\s*["']?\//,           category: 'file-write', reason: 'awk writing to absolute paths is prohibited.' },
 
   // --- Environment manipulation ---
   { pattern: /\bexport\b/,              category: 'env-manip',        reason: 'Environment variable export is prohibited.' },
@@ -720,6 +724,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\btail\b.*\.env/,         category: 'info-leak',        reason: 'Reading .env files is prohibited.' },
   { pattern: /\bhead\b.*\/etc\//,       category: 'info-leak',        reason: 'Reading /etc system files is prohibited.' },
   { pattern: /\btail\b.*\/etc\//,       category: 'info-leak',        reason: 'Reading /etc system files is prohibited.' },
+  { pattern: /\bstrace\b/,               category: 'info-leak',       reason: 'strace (process memory/syscall inspection) is prohibited. Can extract secrets from running processes.' },
+  { pattern: /\bltrace\b/,               category: 'info-leak',       reason: 'ltrace (library call inspection) is prohibited.' },
+  { pattern: /\bgdb\b/,                  category: 'info-leak',       reason: 'gdb (debugger/memory inspection) is prohibited.' },
+  { pattern: /\bptrace\b/,               category: 'info-leak',       reason: 'ptrace is prohibited.' },
   { pattern: /\bstrings\b/,             category: 'info-leak',        reason: 'strings command is prohibited (binary secret extraction).' },
   { pattern: /\bhexdump\b/,             category: 'info-leak',        reason: 'hexdump is prohibited (binary secret extraction).' },
   { pattern: /\bxxd\b/,                 category: 'info-leak',        reason: 'xxd is prohibited (binary secret extraction).' },
@@ -735,6 +743,9 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bphp\s+-S\b/,                category: 'http-server', reason: 'Starting an HTTP server is prohibited.' },
 
   // --- F-NEW-5: git subcommands enabling hook-chained RCE via git_pull --------
+  { pattern: /\bfind\b.*-exec\b/,        category: 'code-exec',       reason: 'find -exec (arbitrary command execution via find) is prohibited.' },
+  { pattern: /\bxargs\b.*\b(sh|bash|rm|curl|wget|python|node|perl|ruby|php)\b/, category: 'code-exec', reason: 'xargs piped to dangerous commands is prohibited.' },
+  { pattern: /\bgit\s+clone\b/,          category: 'code-exec',       reason: 'git clone is prohibited (attacker-controlled repo ingestion with executable install scripts).' },
   { pattern: /\bgit\s+init\b/,              category: 'code-exec',   reason: 'git init is prohibited (creates attacker-controlled repos for hook-chained RCE).' },
   { pattern: /\bgit\s+remote\s+add\b/,      category: 'code-exec',   reason: 'git remote add is prohibited (enables hook-chained RCE via git_pull).' },
   { pattern: /\bgit\s+fetch\b/,             category: 'data-exfil',  reason: 'git fetch is prohibited (enables hook execution from remote repos).' },
@@ -775,6 +786,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // --- F-OP-18: ps env-dump flags (belt-and-suspenders; primary fix is allowlist removal) ---
   { pattern: /\bps\b[^|&;]*\bauxe\b/,       category: 'info-leak',  reason: 'ps auxe dumps process environment variables including secrets.' },
   { pattern: /\bps\b[^|&;]*-[a-zA-Z]*e[a-zA-Z]*o\b/, category: 'info-leak', reason: 'ps -eo (environment output) dumps process environment variables including secrets.' },
+
+  // ─── Base64 Decode-to-Exec ───────────────────────────────────────────────────
+  { pattern: /\bbase64\b.*-d\b/,         category: 'base64-exec',     reason: 'base64 -d (decode) is prohibited (obfuscation layer for shell injection).' },
+  { pattern: /\bopenssl\s+(?:base64|enc)\b.*-d\b/, category: 'base64-exec', reason: 'openssl base64 decode is prohibited (obfuscation layer).' },
 ];
 
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────

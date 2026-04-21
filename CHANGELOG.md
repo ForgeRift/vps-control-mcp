@@ -6,6 +6,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.9.1] — 2026-04-21
+
+### Security (S59-gap)
+- Layer 1: Fixed pip3/pip2 install bypass (versioned pip was not matched by previous pattern)
+- Layer 1: Added `find -exec` and `xargs` dangerous-command patterns to `code-exec`
+- Layer 1: Added `sed -i` and `awk` absolute-path write patterns to `file-write`
+- Layer 1: Added `strace`, `ltrace`, `gdb`, `ptrace` to `info-leak`
+- Layer 1: Added `git clone` to `code-exec`
+- Layer 1: Added `base64-exec` category (base64 -d, openssl base64 -d)
+- Layer 1: Added `apt upgrade` / `apt dist-upgrade` to `pkg-install`
+
 ## [1.9.0] — 2026-04-21
 
 ### S59 pre-publication hardening — BLOCKED tier, deploy gating, OAuth deactivation, CVSS SLA
