@@ -6,6 +6,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.9.3] — 2026-04-22
+
+### Security (S60 Phase 1)
+- Blocked `modprobe`, `insmod`, `rmmod`, `depmod` (C5 — kernel module operations; `modprobe` was already blocked, others were missing)
+- Blocked `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH` in command strings (C7 — dynamic-linker injection)
+- Widened shell `-c` flag pattern from `\s+-c` to `[^\n]*\s+-c`, catching flags-before-c variants (e.g. `bash -x -c payload`) (C8)
+- Blocked `vssadmin`, `wbadmin`, `wevtutil`, `ntdsutil` (C10 — anti-forensics toolkit)
+- Added bypass-corpus test suite: 21 adversarial vectors, all blocked
+
+### Fixed (S61 test suite)
+- Fixed 11 pre-existing test failures (341/352 → 352/352 pass)
+- `validatePath`: EACCES error now surfaces as "path not permitted" instead of crashing
+- `validateArgPath`: added `COUNT_FLAGS` set so numeric counts after `-n`/`-c`/`--lines` etc. are not treated as file paths (`tail -n 50 file.log` no longer blocked)
+- `validateSedArgs`: sed expression argument is now skipped for path validation (mirrors `patternConsumed` logic in `validateGrepArgs`)
+- `validateFindArgs`: glob patterns and predicates (e.g. `"*.log"`) excluded from path validation
+- `scripts/prepare-test-env.mjs` restored and extended to create test directory scaffolding
+- `.env.test.fixture` restored (had been deleted between v1.8.4 and v1.9.1)
+
+---
+
+## [1.9.2] — 2026-04-21
+
+### Fixed
+- Removed `confirm` gate from `deploy_vps_mcp` (self-deploy of MCP server). Gate retained on `deploy` (app pipeline) per ToS §8. `deploy_vps_mcp` already requires `dry_run=false` as confirmation intent; the additional `confirm` parameter caused a bootstrapping deadlock when the Cowork schema cache was stale.
+
+---
+
 ## [1.9.1] — 2026-04-21
 
 ### Security (S59-gap)
