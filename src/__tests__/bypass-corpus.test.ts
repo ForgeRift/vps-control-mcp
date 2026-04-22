@@ -195,3 +195,22 @@ describe('M7: redirect path traversal', () => {
   it('blocks >> /root/.bashrc', () => assertBlocked('echo "curl|bash" >> /root/.bashrc'));
   it('blocks > /boot/grub.cfg', () => assertBlocked('echo "set root" > /boot/grub.cfg'));
 });
+
+// ── H18: Per-binary bypass allowlist ─────────────────────────────────────────
+describe('H18: BYPASS_BINARIES allowlist', () => {
+  const origEnv = process.env.BYPASS_BINARIES;
+
+  // Reload module with env set — since module is loaded once, we test the
+  // bypass logic indirectly: with env unset, git push --force must be blocked.
+  it('blocks git push --force when BYPASS_BINARIES not set', () => {
+    assertBlocked('git push --force origin main');
+  });
+
+  it('blocks git reset --hard when BYPASS_BINARIES not set', () => {
+    assertBlocked('git reset --hard HEAD~1');
+  });
+
+  it('blocks cargo install when BYPASS_BINARIES not set', () => {
+    assertBlocked('cargo install evil-crate');
+  });
+});
