@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 dotenv.config();
 
 function parseProcessList(raw: string | undefined, fallback: string[]): string[] {
@@ -17,6 +19,25 @@ function requireEnv(key: string, example: string): string {
   return v.trim();
 }
 
+// D7: Validate AUDIT_LOG_PATH at startup — reject paths that would silently
+// disable or compromise the audit trail.
+function validateAuditLogPath(p: string): string {
+  const normalized = path.normalize(p).toLowerCase();
+  const FORBIDDEN = ['/dev/null', '/dev/zero', '/dev/random', 'nul', 'con', '/dev/stdout', '/dev/stderr'];
+  if (FORBIDDEN.includes(normalized)) {
+    throw new Error(`AUDIT_LOG_PATH "${p}" is a forbidden sink — audit logging would be silently disabled.`);
+  }
+  if (normalized.startsWith('/tmp/') || normalized.startsWith('/var/tmp/') || normalized === '/tmp' || normalized === '/var/tmp') {
+    throw new Error(`AUDIT_LOG_PATH "${p}" is in a world-writable temp directory — use a hardened log path (e.g. /var/log/forgerift/mcp-audit.log).`);
+  }
+  // Ensure the parent directory exists; refuse to create arbitrary directories.
+  const dir = path.dirname(p);
+  if (!fs.existsSync(dir)) {
+    throw new Error(`AUDIT_LOG_PATH parent directory "${dir}" does not exist. Create it before starting the server.`);
+  }
+  return p;
+}
+
 export const CONFIG = {
   PORT:           parseInt(process.env.PORT || '3001'),
   // APP_DIR is the absolute path to the user's application on this VM — the
@@ -25,7 +46,7 @@ export const CONFIG = {
   // read surface to someone else's filesystem layout.
   APP_DIR:        requireEnv('APP_DIR', '/root/myapp'),
   PM2_LOG_DIR:    process.env.PM2_LOG_DIR    || '/root/.pm2/logs',
-  AUDIT_LOG_PATH: process.env.AUDIT_LOG_PATH || '/root/mcp-audit.log',
+  AUDIT_LOG_PATH: validateAuditLogPath(process.env.AUDIT_LOG_PATH || '/root/mcp-audit.log'),
 
   // Hard read limits — enforced at server level, not by judgment
   MAX_LOG_LINES:    50,
