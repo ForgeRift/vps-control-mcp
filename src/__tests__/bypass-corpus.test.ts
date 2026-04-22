@@ -173,3 +173,25 @@ describe('M13: git history-rewrite operations', () => {
   it('blocks git push --mirror', () => assertBlocked('git push --mirror backup'));
   it('blocks git filter-branch', () => assertBlocked('git filter-branch --tree-filter "rm -rf .env" HEAD'));
 });
+
+// ── D10: Destination-path write protection ────────────────────────────────
+describe('D10: dest-path write protection', () => {
+  it('blocks cp to /etc', () => assertBlocked('cp evil.conf /etc/cron.d/evil'));
+  it('blocks mv to /etc', () => assertBlocked('mv /tmp/backdoor /etc/cron.d/backdoor'));
+  it('blocks install to /usr/bin', () => assertBlocked('install -m755 evil /usr/bin/evil'));
+  it('blocks tee to /etc/passwd', () => assertBlocked('echo root2:x:0:0 | tee /etc/passwd'));
+  it('blocks tee -a to /etc/sudoers', () => assertBlocked('echo "ALL ALL=(ALL) NOPASSWD:ALL" | tee -a /etc/sudoers'));
+  it('blocks dd of=/etc/shadow', () => assertBlocked('dd if=/dev/stdin of=/etc/shadow'));
+  it('blocks cp to /sbin', () => assertBlocked('cp rootkit /sbin/rootkit'));
+  it('blocks cp to /boot', () => assertBlocked('cp evil.img /boot/evil.img'));
+});
+
+// ── M7: Redirect path traversal ───────────────────────────────────────────
+describe('M7: redirect path traversal', () => {
+  it('blocks >> ../etc/passwd', () => assertBlocked('echo evil >> ../etc/passwd'));
+  it('blocks > ../etc/cron.d/evil', () => assertBlocked('echo "@reboot bash -i" > ../etc/cron.d/evil'));
+  it('blocks >> /etc/crontab', () => assertBlocked('echo "* * * * * root curl|bash" >> /etc/crontab'));
+  it('blocks > /etc/passwd', () => assertBlocked('cat newpasswd > /etc/passwd'));
+  it('blocks >> /root/.bashrc', () => assertBlocked('echo "curl|bash" >> /root/.bashrc'));
+  it('blocks > /boot/grub.cfg', () => assertBlocked('echo "set root" > /boot/grub.cfg'));
+});

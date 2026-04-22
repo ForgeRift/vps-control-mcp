@@ -6,6 +6,22 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.9.6] — 2026-04-22
+
+### Security — D10, M7, H17, H20, M8
+
+#### Hard-block additions to `HARD_BLOCKED_PATTERNS` (Layer 1)
+
+- **D10** — Destination-path write protection: argv-aware matcher blocks `cp`/`mv`/`install` writing to `/etc`, `/root`, `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/boot`; also blocks `tee` targeting those paths and `dd of=<sensitive>`
+- **M7** — Redirect path traversal: blocks `>>?` redirections to `../` relative escapes and absolute OS-critical paths (`/etc`, `/root`, `/boot`, `/usr/bin`, `/usr/sbin`, `/bin/`, `/sbin/`)
+
+#### AI classifier enhancements (Layer 2 + Layer 3)
+
+- **H17 / M8** — `commandRiskMeta()` helper: detects chain operators (`|`, `&&`, `||`, `;`, `&`) and scores a risk level (`low`/`medium`/`high`) based on chaining and high-risk keyword presence; risk level and chain operators are injected into both L2 and L3 classifier prompts; chained commands trigger a `CHAIN WARNING` directive
+- **H20** — L3 safety-board now uses `LAYER3_MODEL` (default `claude-sonnet-4-6`) instead of Haiku, giving the critical final review more capability; overridable via `LAYER3_MODEL` env var
+
+---
+
 ## [1.9.5] — 2026-04-22
 
 ### Security — Phase 3 hardening (H1–H15 + M3 + M13)
