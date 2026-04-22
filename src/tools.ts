@@ -710,8 +710,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: />>/,                      category: 'file-write',       reason: 'Append redirect is prohibited.' },
   { pattern: /\btee\b/,                 category: 'file-write',       reason: 'tee (file write) is prohibited.' },
   { pattern: /\bln\s+-s/,              category: 'file-write',       reason: 'Symlink creation is prohibited.' },
-  { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Copying to system directories is prohibited.' },
-  { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var)\//,  category: 'file-write', reason: 'Moving to system directories is prohibited.' },
+  // F-OP-65: broadened to cover /boot /lib /lib64 /opt /home; install added as backstop
+  { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//,      category: 'file-write', reason: 'Copying to system/user directories is prohibited.' },
+  { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//,      category: 'file-write', reason: 'Moving to system/user directories is prohibited.' },
+  { pattern: /\binstall\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//, category: 'file-write', reason: 'install to system/user directories is prohibited.' },
   { pattern: /\bsed\s+.*(?:-i|--in-place)\b/, category: 'file-write', reason: 'sed in-place editing (-i) is prohibited (direct file modification).' },
   { pattern: /\bawk\b.*>\s*["']?\//,           category: 'file-write', reason: 'awk writing to absolute paths is prohibited.' },
 
@@ -1113,27 +1115,81 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
 
   // ── M14: apt dist-upgrade / full-upgrade (already covered by H15 above) ─
 
-  // D10: Destination-path write protection
+  // D10: Destination-path write protection (F-OP-50/51/52/53 hardened — S61)
   // Argv-aware: detect cp/mv/install writing to OS-critical paths,
   // tee writing to sensitive files, and dd of=<sensitive> writes.
   { matcher: (_cmd: string, argv: string[]) => {
       const DEST_CMDS = new Set(['cp', 'mv', 'install']);
       const SENSITIVE = /^\/(etc|root|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
-      const cmdIdx = argv.findIndex(a => DEST_CMDS.has(a.toLowerCase()));
+      // F-OP-53: env-var / tilde expansion is not statically analyzable — fail closed
+      const isExpandable = (p: string): boolean => p.startsWith('~') || p.includes('$');
+      // F-OP-52: canonicalize ../ and ./ segments before prefix test
+      const normalizePath = (p: string): string => {
+        const parts = p.split('/');
+        const out: string[] = [];
+        for (const s of parts) {
+          if (s === '..') { if (out.length > 0) out.pop(); }
+          else if (s !== '' && s !== '.') out.push(s);
+        }
+        return (p.startsWith('/') ? '/' : '') + out.join('/');
+      };
+      const isSensitive = (p: string): boolean => {
+        if (isExpandable(p)) return true;
+        const norm = normalizePath(p);
+        // Append trailing slash so bare directories like /usr/bin match \/usr\/bin\/
+        return SENSITIVE.test(norm.endsWith('/') ? norm : norm + '/');
+      };
+      // F-OP-51: strip absolute path prefix so /bin/cp -> cp
+      const cmdIdx = argv.findIndex(a => DEST_CMDS.has(path.basename(a).toLowerCase()));
       if (cmdIdx >= 0) {
-        const positional = argv.slice(cmdIdx + 1).filter(a => !a.startsWith('-'));
-        const dest = positional[positional.length - 1];
-        if (dest && SENSITIVE.test(dest)) return true;
+        const rest = argv.slice(cmdIdx + 1);
+        // F-OP-50: scan for GNU -t / --target-directory flag (inverts positional order)
+        let dest: string | undefined;
+        for (let j = 0; j < rest.length; j++) {
+          const a = rest[j];
+          // F-OP-65: GNU short-option cluster containing 't' (e.g. -fvt, -Dt, -vft)
+          if (/^-[a-zA-Z]+$/.test(a) && !a.startsWith('--') && a.includes('t') && j + 1 < rest.length) {
+            dest = rest[j + 1]; break;
+          }
+          if (a === '-t' && j + 1 < rest.length) { dest = rest[j + 1]; break; }
+          if (a.length > 2 && a.startsWith('-t') && !a.startsWith('--')) { dest = a.slice(2); break; }
+          const tdMatch = a.match(/^--target-directory(?:=(.+))?$/);
+          if (tdMatch) { dest = tdMatch[1] !== undefined ? tdMatch[1] : rest[j + 1]; break; }
+        }
+        if (dest === undefined) {
+          // No -t flag: last positional argument is the destination
+          const positional = rest.filter(a => !a.startsWith('-'));
+          dest = positional[positional.length - 1];
+        }
+        if (dest && isSensitive(dest)) return true;
       }
       const teeIdx = argv.findIndex(a => a === 'tee');
       if (teeIdx >= 0)
-        return argv.slice(teeIdx + 1).filter(a => !a.startsWith('-')).some(a => SENSITIVE.test(a));
-      return argv.some(a => /^of=/i.test(a) && SENSITIVE.test(a.slice(3)));
+        return argv.slice(teeIdx + 1).filter(a => !a.startsWith('-')).some(a => isSensitive(a));
+      return argv.some(a => /^of=/i.test(a) && isSensitive(a.slice(3)));
     }, category: 'sensitive-path-write' },
 
-  // M7: Redirect path traversal and sensitive-target writes.
-  // Detects shell redirections at ../ (relative escape) or absolute OS-critical paths.
-  { pattern: />>?\s*\.\.\//,      category: 'sensitive-path-write' },
+  // M7: Redirect path traversal — F-OP-56: tolerates ./ prefix(es) before ..
+  { pattern: />>?\s*(?:\.\/)*\.\.\//,      category: 'sensitive-path-write' },
+  // M7-extended: canonicalize redirect target and check against sensitive paths.
+  // Catches > /tmp/../etc/passwd and > .//./../etc/passwd style obfuscations (F-OP-56).
+  { matcher: (cmd: string, _argv: string[]) => {
+      const m = />>?\s*([^\s|&;<>\r\n]+)/.exec(cmd);
+      if (!m) return false;
+      const rawPath = m[1];
+      // F-OP-66: removed fast-path — > ./etc/passwd (no ..) must still be caught after normalization
+      // Normalize: collapse // and resolve . and .. segments; treat unresolvable ..
+      // at root as fail-closed (stay at root)
+      const parts = rawPath.split(/\/+/).filter(s => s !== '');
+      const out: string[] = [];
+      for (const s of parts) {
+        if (s === '..') { if (out.length > 0) out.pop(); }
+        else if (s !== '.') out.push(s);
+      }
+      const normalized = '/' + out.join('/') + '/';
+      const SENSITIVE = /^\/(etc|root|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
+      return SENSITIVE.test(normalized);
+    }, category: 'sensitive-path-write' },
   { pattern: />>?\s*\/(etc|root|boot|usr\/bin|usr\/sbin|bin\/|sbin\/)/i, category: 'sensitive-path-write' },
 
 ];
@@ -1200,7 +1256,7 @@ function checkHardBlocked(cmd: string): HardBlockedPattern | null {
       const binary = argv[0]?.toLowerCase() ?? '';
       if (binary && BYPASS_BINARIES.get(binary)?.has(entry.category)) {
         // Bypass active: demote to AI review. Log for audit trail.
-        console.warn(`[SECURITY-BYPASS] H18 bypass: binary='${binary}' category='${entry.category}' cmd=${JSON.stringify(cmd.slice(0, 120))}`);
+        console.warn(`[SECURITY-BYPASS] H18 bypass: binary='${binary}' category='${entry.category}' cmd=${JSON.stringify(cmd.slice(0, 512))}`);
         continue;
       }
     }
@@ -1246,6 +1302,9 @@ function commandRiskMeta(cmd: string): {
     /\b(cron|systemd|init\.d|rc\.local|authorized_keys)\b/i,
     /\b(chmod|chown)\b[^|&;\n]*-[Rr]\b/i,
     /\b(iptables|ufw|firewall|setenforce)\b/i,
+    // F-OP-58: additional destructive patterns omitted from prior HIGH_RISK list
+    /\b(wipefs|cryptsetup|mdadm)\b/i,
+    /\bkill\s+-9\s+1\b/,
   ];
   for (const p of HIGH_RISK) if (p.test(cmd)) score++;
   const riskLevel = score >= 4 ? 'high' : score >= 1 ? 'medium' : 'low';
@@ -1254,7 +1313,14 @@ function commandRiskMeta(cmd: string): {
 
 // H20: L3 uses a configurable, more capable model for the critical safety-board
 // review. Override with LAYER3_MODEL=claude-haiku-4-5-20251001 to revert.
-const LAYER3_MODEL = process.env.LAYER3_MODEL ?? 'claude-sonnet-4-6';
+// F-OP-59: explicit allowlist prevents an attacker with env access from injecting
+// an arbitrary / weaker model string via the environment variable.
+const _ALLOWED_L3_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001']);
+const _envL3Model = process.env.LAYER3_MODEL;
+if (_envL3Model && !_ALLOWED_L3_MODELS.has(_envL3Model)) {
+  console.warn(`[SECURITY] LAYER3_MODEL='${_envL3Model}' is not in the allowlist; defaulting to claude-sonnet-4-6`);
+}
+const LAYER3_MODEL = (_envL3Model && _ALLOWED_L3_MODELS.has(_envL3Model)) ? _envL3Model : 'claude-sonnet-4-6';
 
 // H18: Per-binary bypass allowlist -- allows specific named binaries to skip the
 // hard-block for specific categories and proceed to AI review (L2/L3) instead.
@@ -1263,12 +1329,22 @@ const LAYER3_MODEL = process.env.LAYER3_MODEL ?? 'claude-sonnet-4-6';
 // Every bypass is logged. Requires server-level (env) access to change.
 const BYPASS_BINARIES: Map<string, Set<string>> = new Map();
 (process.env.BYPASS_BINARIES ?? '').split(',').filter(Boolean).forEach(entry => {
-  const [bin, cat] = entry.trim().split(':');
+  // F-OP-57: trim and lowercase bin so 'Git:git-history-rewrite' activates correctly
+  const [rawBin, rawCat] = entry.trim().split(':');
+  const bin = rawBin?.trim().toLowerCase();
+  const cat = rawCat?.trim();
   if (bin && cat) {
     if (!BYPASS_BINARIES.has(bin)) BYPASS_BINARIES.set(bin, new Set());
-    BYPASS_BINARIES.get(bin)!.add(cat.trim());
+    BYPASS_BINARIES.get(bin)!.add(cat);
   }
 });
+// F-OP-57: startup audit — enumerate active bypass map so operators can verify config
+if (BYPASS_BINARIES.size > 0) {
+  console.info('[SECURITY-BYPASS] H18 active bypass map:');
+  for (const [bin, cats] of BYPASS_BINARIES) {
+    console.info(`  binary='${bin}' categories=[${[...cats].join(', ')}]`);
+  }
+}
 
 async function blockedTierLayer2(cmd: string, context: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;

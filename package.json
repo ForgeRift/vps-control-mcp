@@ -1,6 +1,6 @@
 {
   "name": "vps-control-mcp",
-  "version": "1.9.7",
+  "version": "1.10.1",
   "description": "Structured MCP server for safe, audited VPS control via Claude",
   "type": "module",
   "main": "dist/index.js",

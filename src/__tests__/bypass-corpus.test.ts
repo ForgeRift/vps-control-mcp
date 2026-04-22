@@ -196,6 +196,76 @@ describe('M7: redirect path traversal', () => {
   it('blocks > /boot/grub.cfg', () => assertBlocked('echo "set root" > /boot/grub.cfg'));
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// S61 Eighth-Pass Regression Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── F-OP-50: GNU -t / --target-directory flag ─────────────────────────────
+describe('F-OP-50: GNU -t / --target-directory inverted positional', () => {
+  it('blocks cp -t /etc/ evil', () => assertBlocked('cp -t /etc/ evil'));
+  it('blocks cp --target-directory=/etc/ evil', () => assertBlocked('cp --target-directory=/etc/ evil'));
+  it('blocks cp --target-directory /etc/ evil', () => assertBlocked('cp --target-directory /etc/ evil'));
+  it('blocks install -t /usr/bin/ evil', () => assertBlocked('install -t /usr/bin/ evil'));
+  it('blocks mv -t /etc/ backdoor', () => assertBlocked('mv -t /etc/ backdoor'));
+  it('blocks cp -t/etc/ evil (glued short form)', () => assertBlocked('cp -t/etc/ evil'));
+});
+
+// ── F-OP-51: Absolute-path invocation bypass ──────────────────────────────
+describe('F-OP-51: absolute-path binary invocation', () => {
+  it('blocks /bin/cp file /etc/foo', () => assertBlocked('/bin/cp file /etc/foo'));
+  it('blocks /usr/bin/install file /usr/bin/evil', () => assertBlocked('/usr/bin/install file /usr/bin/evil'));
+  it('blocks /bin/mv file /etc/cron.d/evil', () => assertBlocked('/bin/mv file /etc/cron.d/evil'));
+});
+
+// ── F-OP-52: Path-traversal in destination ────────────────────────────────
+describe('F-OP-52: path-traversal destination canonicalization', () => {
+  it('blocks cp file /var/../etc/passwd', () => assertBlocked('cp file /var/../etc/passwd'));
+  it('blocks cp file /tmp/../etc/passwd', () => assertBlocked('cp file /tmp/../etc/passwd'));
+  it('blocks cp file /var/../root/evil', () => assertBlocked('cp file /var/../root/evil'));
+});
+
+// ── F-OP-53: Env-var / tilde expansion in destination ────────────────────
+describe('F-OP-53: env-var and tilde expansion (fail-closed)', () => {
+  it('blocks cp file $HOME/../../etc/passwd', () => assertBlocked('cp file $HOME/../../etc/passwd'));
+  it('blocks cp file ~root/.ssh/authorized_keys', () => assertBlocked('cp file ~root/.ssh/authorized_keys'));
+  it('blocks cp file ${HOME}/../etc/shadow', () => assertBlocked('cp file ${HOME}/../etc/shadow'));
+  it('blocks cp file ~/../../etc/passwd', () => assertBlocked('cp file ~/../../etc/passwd'));
+});
+
+// ── F-OP-56: Redirect traversal with ./ prefix(es) ────────────────────────
+describe('F-OP-56: redirect path traversal with ./ obfuscation', () => {
+  it('blocks echo x > ./../etc/passwd', () => assertBlocked('echo x > ./../etc/passwd'));
+  it('blocks echo x > .//./../etc/passwd', () => assertBlocked('echo x > .//./../etc/passwd'));
+  it('blocks echo x >> ./../etc/cron.d/evil', () => assertBlocked('echo x >> ./../etc/cron.d/evil'));
+  it('blocks echo x > /tmp/../etc/passwd', () => assertBlocked('echo x > /tmp/../etc/passwd'));
+  it('blocks echo x > /var/../root/evil', () => assertBlocked('echo x > /var/../root/evil'));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S62 Ninth-Pass Regression Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── F-OP-62/63/64: N/A — LT only; see LT review ─────────────────────────
+
+// ── F-OP-65: GNU short-option cluster + BLOCKED_PATTERNS broadening (VPS) ─
+describe('F-OP-65: GNU short-option cluster -t + broadened BLOCKED_PATTERNS (VPS)', () => {
+  it('blocks cp -fvt /etc/ evil', () => assertBlocked('cp -fvt /etc/ evil'));
+  it('blocks cp -fvt /boot/grub/ evil', () => assertBlocked('cp -fvt /boot/grub/ evil'));
+  it('blocks install -Dt /etc/ evil', () => assertBlocked('install -Dt /etc/ evil'));
+  it('blocks install -Dt /boot/grub/ evil', () => assertBlocked('install -Dt /boot/grub/ evil'));
+  it('blocks cp -vft /lib/modules/ evil', () => assertBlocked('cp -vft /lib/modules/ evil'));
+  it('allows cp -v file.txt /tmp/dest (benign)', () => assertAllowed('cp -v file.txt /tmp/dest'));
+});
+
+// ── F-OP-66: M7-extended no-.. redirect bypass (VPS) ─────────────────────
+describe('F-OP-66: M7-extended no-.. redirect to sensitive path (VPS)', () => {
+  it('blocks cat x > ./etc/passwd', () => assertBlocked('cat x > ./etc/passwd'));
+  it('blocks cat x >> ./etc/crontab', () => assertBlocked('cat x >> ./etc/crontab'));
+  it('blocks cat x > ././boot/grub/grub.cfg', () => assertBlocked('cat x > ././boot/grub/grub.cfg'));
+  it('allows cat x > ./out.txt (benign relative)', () => assertAllowed('cat x > ./out.txt'));
+  it('allows echo x > /tmp/report.log (benign absolute)', () => assertAllowed('echo x > /tmp/report.log'));
+});
+
 // ── H18: Per-binary bypass allowlist ─────────────────────────────────────────
 describe('H18: BYPASS_BINARIES allowlist', () => {
   const origEnv = process.env.BYPASS_BINARIES;
