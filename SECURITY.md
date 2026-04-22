@@ -314,3 +314,28 @@ To report a security vulnerability, email security@sharpedge.io with:
 - Suggested remediation (if any)
 
 Please allow 90 days for a fix before public disclosure. Critical vulnerabilities may be addressed more quickly.
+
+---
+
+## Disclaimer of Warranties and Limitation of Liability
+
+**THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.**
+
+vps-control-mcp is a security-enhancing layer that operates on top of your existing infrastructure. It does not guarantee prevention of all unauthorized actions and should be used as one component of a broader security posture, not as a sole safeguard.
+
+### Advanced Feature: BYPASS_BINARIES
+
+The `BYPASS_BINARIES` environment variable (H18) allows administrators to demote specific binary+category combinations from hard-block to AI-reviewed status. This is an **advanced configuration intended for experienced administrators only.**
+
+**By enabling `BYPASS_BINARIES`, you acknowledge and accept that:**
+
+- You are reducing the default protection level for the specified binary/category combinations.
+- Bypassed commands are still subject to AI review (L2/L3 classifier pipeline) but are no longer hard-blocked at Layer 1.
+- Every bypass event is logged to the audit trail, but logging does not prevent execution if the AI classifiers approve the command.
+- Misconfiguration of this setting may allow destructive or unauthorized commands to execute on your server.
+- The authors and distributors of this software bear no liability for damages resulting from the use or misconfiguration of this feature.
+- You are solely responsible for evaluating whether this feature is appropriate for your environment and risk tolerance.
+
+**This feature is disabled by default. Do not enable it unless you have a specific, well-understood operational requirement.**
+
+If you are unsure whether you need this feature, you do not need it.

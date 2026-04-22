@@ -1188,14 +1188,23 @@ function checkHardBlocked(cmd: string): HardBlockedPattern | null {
   const argv = tokenizeCommand(cmd);
   const lines = cmd.split(/\r?\n/).filter(l => l.trim().length > 0);
   for (const entry of HARD_BLOCKED_PATTERNS) {
+    let matched = false;
     if (entry.matcher) {
-      if (entry.matcher(cmd, argv)) return entry;
+      matched = entry.matcher(cmd, argv);
     } else if (entry.pattern) {
-      for (const line of lines) {
-        if (entry.pattern.test(line)) return entry;
-      }
-      if (entry.pattern.test(cmd)) return entry;
+      matched = lines.some(l => entry.pattern!.test(l)) || entry.pattern.test(cmd);
     }
+    if (!matched) continue;
+    // H18: Check per-binary bypass allowlist
+    if (BYPASS_BINARIES.size > 0) {
+      const binary = argv[0]?.toLowerCase() ?? '';
+      if (binary && BYPASS_BINARIES.get(binary)?.has(entry.category)) {
+        // Bypass active: demote to AI review. Log for audit trail.
+        console.warn(`[SECURITY-BYPASS] H18 bypass: binary='${binary}' category='${entry.category}' cmd=${JSON.stringify(cmd.slice(0, 120))}`);
+        continue;
+      }
+    }
+    return entry;
   }
   return null;
 }
@@ -1246,6 +1255,20 @@ function commandRiskMeta(cmd: string): {
 // H20: L3 uses a configurable, more capable model for the critical safety-board
 // review. Override with LAYER3_MODEL=claude-haiku-4-5-20251001 to revert.
 const LAYER3_MODEL = process.env.LAYER3_MODEL ?? 'claude-sonnet-4-6';
+
+// H18: Per-binary bypass allowlist -- allows specific named binaries to skip the
+// hard-block for specific categories and proceed to AI review (L2/L3) instead.
+// Format: BYPASS_BINARIES=git:git-history-rewrite,npm:pkg-mgr-destructive
+// WARNING: Only configure this if you understand the security implications.
+// Every bypass is logged. Requires server-level (env) access to change.
+const BYPASS_BINARIES: Map<string, Set<string>> = new Map();
+(process.env.BYPASS_BINARIES ?? '').split(',').filter(Boolean).forEach(entry => {
+  const [bin, cat] = entry.trim().split(':');
+  if (bin && cat) {
+    if (!BYPASS_BINARIES.has(bin)) BYPASS_BINARIES.set(bin, new Set());
+    BYPASS_BINARIES.get(bin)!.add(cat.trim());
+  }
+});
 
 async function blockedTierLayer2(cmd: string, context: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
