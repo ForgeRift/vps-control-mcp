@@ -6,6 +6,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.9.5] — 2026-04-22
+
+### Security — Phase 3 hardening (H1–H15 + M3 + M13)
+
+#### Hard-block additions to `HARD_BLOCKED_PATTERNS` (Layer 1)
+
+- **H1** — Deletion alternatives: `unlink`, `find --delete`, argv-aware `mv <src> /dev/null` matcher
+- **H3** — Uncovered script interpreters with inline-exec flags: `perl -e`, `ruby -e`, `lua -e`, `php -r`, `tclsh`, `expect -c`, `m4 syscmd`, `awk system()`, `bpftrace -e`
+- **H6** — Kernel namespace / capability primitives: `nsenter`, `unshare`, `capsh`, `chroot`, `pivot_root`, `ip netns`
+- **H7** — Additional container runtimes: `podman`, `runc`, `crun`, `lxc`, `nerdctl`, `buildah`, `singularity`, `apptainer`
+- **H8** — `/sys/` filesystem and raw device access: `/sys/…`, `/dev/mem`, `/dev/kmem`, `/dev/port`
+- **H9** — BPF / kernel probing: `bpftool`, `perf trace`, `perf probe`
+- **H12** — `xargs` fan-out (gives `find -exec` equivalent without `-exec` syntax)
+- **H13** — Privilege-escalation alternatives: `sudoedit`, `pkexec`, `doas`, `runuser`, `machinectl shell`
+- **H14** — `systemd-run` scheduled execution
+- **H15** — Package-manager destructive ops: `apt purge/remove/dist-upgrade`, `apt-get`, `dpkg`, `yum`, `dnf`, `zypper`, `rpm`, `snap`, `flatpak`, `conda`, `brew`, `cargo`, `gem`, `go install`, `emerge`, `pacman`
+- **M3** — `ncat` (netcat variant not caught by `\bnc\b`)
+- **M13** — Git history-rewrite: `git reset --hard`, `git clean -f`, `git push --force/--mirror`, `git filter-branch/filter-repo`
+
+#### Architecture
+
+- `validateCommand` now also calls `checkHardBlocked` synchronously so all `HARD_BLOCKED_PATTERNS` are enforced in every code path, not only when the async three-layer pipeline runs.
+
+#### Tests
+
+- 63 new Phase 3 bypass-corpus tests added (415 total, 415 pass).
+
 ## [1.9.4] — 2026-04-22
 
 ### Security (S61 Phase 2 — architectural hardening)
@@ -262,26 +289,4 @@ Closes all findings from the second-pass adversarial review. All changes tested 
 - README gained a "Working with Claude" section and a Known Issues link under Support.
 
 ### Why
-- Transparency: devs evaluating the repo should be able to see limitations, iteration velocity, and design intent at a glance. Hidden caveats erode trust faster than disclosed ones.
-- Accuracy: filenames should describe what they do. A `CLAUDE.md` in a plugin path that isn't actually auto-loaded is a trap for future contributors.
-
----
-
-## [1.3.0] — 2026-04-17
-
-### Added
-- Explicit sensitive-file pattern for AWS config files without leading dots (`/aws/config`, `/aws/credentials`). Catches the common case where users store AWS creds without the `.` prefix.
-
-### Changed
-- Repository attribution updated from Anthropic placeholders to ForgeRift LLC across README, `.claude-plugin/plugin.json`, and security contact email.
-- Version bump to align `plugin.json` with `package.json`, which had drifted.
-
-### Removed
-- `check-failing.mjs` (internal diagnostic script, not intended for distribution).
-- `.mcp.json` (personal developer config that contained a hardcoded VPS IP). Added to `.gitignore`.
-
----
-
-## [1.2.0] — earlier
-
-Baseline: three-tier command security model (RED/AMBER/GREEN), OA
+- Transparency: devs evaluating the repo should be able to see limitati

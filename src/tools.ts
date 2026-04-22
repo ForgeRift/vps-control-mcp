@@ -869,6 +869,18 @@ function validateCommand(command: string): void {
       );
     }
   }
+
+  // HARD_BLOCKED_PATTERNS (Layer 1 of BLOCKED tier) — also enforce synchronously
+  // so validateCommand provides complete single-call safety coverage regardless
+  // of whether the async three-layer pipeline is invoked.
+  const hardBlocked = checkHardBlocked(command);
+  if (hardBlocked) {
+    throw new Error(
+      `⛔ BLOCKED [${hardBlocked.category}]: Command matches a hard-blocked pattern.\n` +
+      `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+      `Attempting to circumvent security controls violates the Terms of Service.`
+    );
+  }
 }
 
 // Returns the AMBER warning text if any pattern matches, null otherwise.
@@ -1004,6 +1016,103 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   { pattern: /\bkubectl\b[^|&;\n]*\bdelete\b[^|&;\n]*(namespace\s+--all|--all\s+-A|--all-namespaces)/i, category: 'container-nuclear' },
   { pattern: /\bhelm\b[^|&;\n]*\buninstall\b[^|&;\n]*--all\b/i,              category: 'container-nuclear' },
   { pattern: /\bk3s-uninstall\.sh\b/i,                                         category: 'container-nuclear' },
+  // ── H1: Deletion alternatives ────────────────────────────────────────────
+  // unlink is a direct syscall-level file deletion not caught by the rm pattern.
+  // find -delete and mv /dev/null overwrite are functionally equivalent to rm.
+  { pattern: /\bunlink\b/i,                                                    category: 'recursive-file-deletion' },
+  { pattern: /\bfind\b[^|&;\n]*\s--delete\b/i,                               category: 'recursive-file-deletion' },
+  { matcher: (_cmd, argv) => {
+      // H1: mv <src> /dev/null — overwrites/destroys destination
+      const mvIdx = argv.findIndex(a => /^mv$/i.test(a));
+      return mvIdx >= 0 && argv.slice(mvIdx + 1).some(a => a === '/dev/null');
+    }, category: 'recursive-file-deletion' },
+
+  // ── H3: Uncovered script interpreters ────────────────────────────────────
+  // Each of these can execute arbitrary code with a single flag.
+  { pattern: /\bperl\b\s+-[eE]\b/i,                                          category: 'code-exec' },
+  { pattern: /\bruby\b\s+-[eE]\b/i,                                          category: 'code-exec' },
+  { pattern: /\blua\b\s+-[eE]\b/i,                                           category: 'code-exec' },
+  { pattern: /\bphp\b\s+-r\b/i,                                              category: 'code-exec' },
+  { pattern: /\btclsh\b/i,                                                    category: 'code-exec' },
+  { pattern: /\bexpect\b\s+-c\b/i,                                            category: 'code-exec' },
+  { pattern: /\bm4\b[^|&;\n]*syscmd\b/i,                                      category: 'code-exec' },
+  { pattern: /\bawk\b[^|&;\n]*\bsystem\s*\(/i,                               category: 'code-exec' },
+  { pattern: /\bbpftrace\b\s+-e\b/i,                                          category: 'code-exec' },
+
+  // ── H6: Kernel namespace and capability primitives ───────────────────────
+  // These escape container and privilege boundaries.
+  { pattern: /\bnsenter\b/i,                                                   category: 'kernel-namespace' },
+  { pattern: /\bunshare\b/i,                                                   category: 'kernel-namespace' },
+  { pattern: /\bcapsh\b/i,                                                     category: 'kernel-namespace' },
+  { pattern: /\bchroot\b/i,                                                    category: 'kernel-namespace' },
+  { pattern: /\bpivot_root\b/i,                                                category: 'kernel-namespace' },
+  { pattern: /\bip\b[^|&;\n]*\bnetns\b/i,                                     category: 'kernel-namespace' },
+
+  // ── H7: Container runtimes beyond docker/kubectl ─────────────────────────
+  { pattern: /\bpodman\b/i,                                                    category: 'container-nuclear' },
+  { pattern: /\brunc\b/i,                                                      category: 'container-nuclear' },
+  { pattern: /\bcrun\b/i,                                                      category: 'container-nuclear' },
+  { pattern: /\blxc\b/i,                                                       category: 'container-nuclear' },
+  { pattern: /\bnerdctl\b/i,                                                   category: 'container-nuclear' },
+  { pattern: /\bbuildah\b/i,                                                   category: 'container-nuclear' },
+  { pattern: /\bsingularity\b/i,                                               category: 'container-nuclear' },
+  { pattern: /\bapptainer\b/i,                                                 category: 'container-nuclear' },
+
+  // ── H8: /sys/ filesystem and raw device access ───────────────────────────
+  // sysfs exposes cgroup controls, debugfs, YAMA ptrace, firmware loading.
+  { pattern: /\/sys\/[^\s|&;'"]/,                                              category: 'sensitive-path-write' },
+  { pattern: /\/dev\/mem\b/,                                                   category: 'sensitive-path-write' },
+  { pattern: /\/dev\/kmem\b/,                                                  category: 'sensitive-path-write' },
+  { pattern: /\/dev\/port\b/,                                                  category: 'sensitive-path-write' },
+
+  // ── H9: BPF and kernel probing ───────────────────────────────────────────
+  { pattern: /\bbpftool\b/i,                                                   category: 'kernel-probe' },
+  { pattern: /\bperf\b[^|&;\n]*\btrace\b/i,                                   category: 'kernel-probe' },
+  { pattern: /\bperf\b[^|&;\n]*\bprobe\b/i,                                   category: 'kernel-probe' },
+
+  // ── H12: xargs fan-out ───────────────────────────────────────────────────
+  // | xargs composition gives find -exec equivalent without -exec syntax.
+  { pattern: /\bxargs\b/i,                                                     category: 'recursive-file-deletion' },
+
+  // ── H13: Privilege escalation alternatives to sudo/su ───────────────────
+  { pattern: /\bsudoedit\b/i,                                                  category: 'privilege-escalation' },
+  { pattern: /\bpkexec\b/i,                                                    category: 'privilege-escalation' },
+  { pattern: /\bdoas\b/i,                                                      category: 'privilege-escalation' },
+  { pattern: /\brunuser\b/i,                                                    category: 'privilege-escalation' },
+  { pattern: /\bmachinectl\b[^|&;\n]*\bshell\b/i,                             category: 'privilege-escalation' },
+
+  // ── H14: Scheduled execution ─────────────────────────────────────────────
+  { pattern: /\bsystemd-run\b/i,                                               category: 'scheduled-exec' },
+
+  // ── H15: Package manager coverage gaps (Linux) ───────────────────────────
+  { pattern: /\bapt\b[^|&;\n]*\b(purge|remove|reinstall|dist-upgrade|full-upgrade)\b/i, category: 'pkg-mgr-destructive' },
+  { pattern: /\bapt-get\b[^|&;\n]*\b(dist-upgrade|full-upgrade|remove|purge)\b/i,       category: 'pkg-mgr-destructive' },
+  { pattern: /\bdpkg\b[^|&;\n]*(-i\b|--install\b|--purge\b)/i,               category: 'pkg-mgr-destructive' },
+  { pattern: /\b(yum|dnf)\b[^|&;\n]*\b(install|remove|erase|reinstall)\b/i,  category: 'pkg-mgr-destructive' },
+  { pattern: /\bzypper\b[^|&;\n]*\b(install|in\b|remove|rm\b)\b/i,           category: 'pkg-mgr-destructive' },
+  { pattern: /\brpm\b[^|&;\n]*(-i\b|--install\b|-e\b|--erase\b)/i,           category: 'pkg-mgr-destructive' },
+  { pattern: /\bsnap\b[^|&;\n]*\binstall\b/i,                                 category: 'pkg-mgr-destructive' },
+  { pattern: /\bflatpak\b[^|&;\n]*\binstall\b/i,                              category: 'pkg-mgr-destructive' },
+  { pattern: /\bconda\b[^|&;\n]*\b(install|remove|uninstall)\b/i,             category: 'pkg-mgr-destructive' },
+  { pattern: /\bbrew\b[^|&;\n]*\b(install|uninstall|remove|upgrade)\b/i,      category: 'pkg-mgr-destructive' },
+  { pattern: /\bcargo\b[^|&;\n]*\binstall\b/i,                                category: 'pkg-mgr-destructive' },
+  { pattern: /\bgem\b[^|&;\n]*\b(install|uninstall)\b/i,                      category: 'pkg-mgr-destructive' },
+  { pattern: /\bgo\b[^|&;\n]*\binstall\b/i,                                   category: 'pkg-mgr-destructive' },
+  { pattern: /\bemerge\b/i,                                                    category: 'pkg-mgr-destructive' },
+  { pattern: /\bpacman\b[^|&;\n]*(-S\b|-R\b|--sync\b|--remove\b)/i,          category: 'pkg-mgr-destructive' },
+
+  // ── M3: ncat (nc variant not caught by \bnc\b) ───────────────────────────
+  { pattern: /\bncat\b/i,                                                      category: 'download-cradle' },
+
+  // ── M13: Git destructive operations ──────────────────────────────────────
+  { pattern: /\bgit\b[^|&;\n]*\breset\b[^|&;\n]*--hard\b/i,                  category: 'git-history-rewrite' },
+  { pattern: /\bgit\b[^|&;\n]*\bclean\b[^|&;\n]*-[a-zA-Z]*f[a-zA-Z]*/i,     category: 'git-history-rewrite' },
+  { pattern: /\bgit\b[^|&;\n]*\bcheckout\b[^|&;\n]*--\s+\./i,                category: 'git-history-rewrite' },
+  { pattern: /\bgit\b[^|&;\n]*\bpush\b[^|&;\n]*(--force|-f)\b/i,             category: 'git-history-rewrite' },
+  { pattern: /\bgit\b[^|&;\n]*\bpush\b[^|&;\n]*--mirror\b/i,                 category: 'git-history-rewrite' },
+
+  // ── M14: apt dist-upgrade / full-upgrade (already covered by H15 above) ─
+
 ];
 
 // D2: POSIX shlex-style tokenizer. Handles single quotes, double quotes,
