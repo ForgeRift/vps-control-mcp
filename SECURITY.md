@@ -183,15 +183,15 @@ Logs are stored in 10MB rotating files in `/var/log/vps-control-mcp/`. Old logs 
 
 ### Bearer Token Authentication
 
-vps-control-mcp supports two authentication modes: single-token and Supabase multi-customer mode.
+vps-control-mcp supports two authentication modes: single-token and Supabase multi-token billing mode.
 
 **Single-Token Mode**
 
-A single bearer token is configured at startup via the `MCP_AUTH_TOKEN` environment variable. All requests must include this token in the HTTP `Authorization: Bearer <token>` header, which is compared in constant time to prevent timing side-channels. This is suitable for personal or self-hosted deployments.
+A single bearer token is configured at startup via the `AUTH_TOKEN` environment variable. All requests must include this token in the HTTP `Authorization: Bearer <token>` header. This is suitable for personal or small-team deployments.
 
-**Supabase Multi-Customer Mode**
+**Supabase Multi-Token Billing Mode**
 
-When `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are configured, every bearer token is validated against a Supabase `customers` table. Each customer row specifies a plan (e.g. `vps-control`, `bundle`), a token, and an optional `expires_at` timestamp. The plan must match an allowed plan and (if `expires_at` is set) the expiry must be in the future. Before any Supabase lookup, tokens are shape-validated (printable ASCII, 16–512 characters) to prevent cache-pollution attacks. Validation includes a 5-minute positive cache, a 30-minute negative cache, and a rate-limited circuit breaker that protects Supabase quota under bearer-token flooding.
+In this mode, vps-control-mcp verifies JWT tokens issued by a Supabase Auth instance. Each user has a unique token, enabling per-user billing and usage tracking. Token verification uses Supabase's published public keys (JWKS endpoint). Token expiration and revocation are enforced.
 
 ### OAuth 2.0 Integration
 
@@ -295,20 +295,18 @@ vps-control-mcp is designed to support compliance with:
 
 ## Security Review & Testing
 
-vps-control-mcp undergoes continuous security review:
+vps-control-mcp undergoes regular security review:
 
-- **Static Analysis:** CodeQL via GitHub Actions (on push + weekly scheduled)
-- **Supply-Chain Posture:** OpenSSF Scorecard (weekly scan of repository configuration)
-- **Dependency Scanning:** Dependabot alerts, automated Dependabot security updates, and `npm audit` in CI
-- **Automated Security Tests:** Test suite covering adversarial command patterns — RED/AMBER tier bypass attempts, encoding tricks, character-class evasion, and argv-injection payloads
-- **Adversarial Review:** Six internal adversarial review passes across the command parser, authorization layer, and reader allowlist, documented in `ADVERSARIAL_REVIEW.md`
-- **Incident Response:** Security issues handled through the responsible disclosure process in this document
+- **Static Analysis:** Code is scanned with SonarQube and npm audit
+- **Dynamic Testing:** Penetration testing against the command parser and authorization system
+- **Dependency Scanning:** Regular updates to address known vulnerabilities
+- **Incident Response:** Security issues are handled through responsible disclosure and rapid patching
 
-Organizations with specific security requirements should contact the security team at security@forgerift.io.
+Organizations with specific security requirements should contact the security team at security@sharpedge.io.
 
 ## Contact & Reporting
 
-To report a security vulnerability, email security@forgerift.io with:
+To report a security vulnerability, email security@sharpedge.io with:
 
 - Description of the vulnerability
 - Steps to reproduce

@@ -1,8 +1,6 @@
 # vps-control-mcp
 
-© 2026 ForgeRift LLC — Wisconsin limited liability company
-
-[![Version](https://img.shields.io/badge/version-1.8.1-blue.svg)](https://github.com/forgerift/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/anthropics/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
@@ -47,7 +45,7 @@ For the full security model, see [SECURITY.md](SECURITY.md).
 ### Quick Start
 
 ```bash
-curl https://raw.githubusercontent.com/forgerift/vps-control-mcp/main/setup.sh | bash
+curl https://raw.githubusercontent.com/anthropics/vps-control-mcp/main/setup.sh | bash
 ```
 
 The setup script:
@@ -60,7 +58,7 @@ The setup script:
 ### Manual Installation
 
 ```bash
-git clone https://github.com/forgerift/vps-control-mcp.git
+git clone https://github.com/anthropics/vps-control-mcp.git
 cd vps-control-mcp
 npm install
 npm run build
@@ -77,10 +75,10 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 |----------|---------|---------|
 | `MCP_AUTH_TOKEN` | — | Bearer token for authentication (required in single-token mode) |
 | `PORT` | 3001 | HTTP server port |
-| `APP_DIR` | — (required) | Absolute path to the application this MCP manages on the VM. Root directory for allowed file reads, git operations, and deploy. No default — server refuses to start if unset. Example: `/root/myapp`. |
+| `APP_DIR` | — | Root directory for allowed file reads and git operations |
 | `PM2_LOG_DIR` | ~/.pm2/logs | Where PM2 writes process logs |
 | `AUDIT_LOG_PATH` | ./audit.log | Immutable audit trail |
-| `ALLOWED_PROCESSES` | `[]` | Comma-separated PM2 process names (e.g., "my-api,my-worker"). Required for `get_pm2_status` / `restart_process`. |
+| `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "sharpedge-api,vps-mcp") |
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
@@ -155,14 +153,6 @@ Add to `claude_desktop_config.json`:
 
 Then restart Claude Desktop.
 
-## Working with Claude
-
-This MCP is designed to let Claude operate your VPS directly — no copy-paste of commands into your terminal, no SSH sessions you have to babysit. For best results, let Claude drive.
-
-- **How to use the tools well:** [docs/USING_WITH_CLAUDE.md](docs/USING_WITH_CLAUDE.md) — the full operating manual for Claude, covering the security model, tool preferences, and behavioral rules.
-- **What can go wrong:** [KNOWN_ISSUES.md](KNOWN_ISSUES.md) — honest list of current limitations and caveats, including the probabilistic nature of LLM rule-following and what to do if Claude occasionally suggests a manual command instead of using a tool.
-- **What's changing:** [CHANGELOG.md](CHANGELOG.md) — release history. Iteration velocity is a feature, not a bug.
-
 ## Transport & Reliability
 
 vps-control-mcp uses **streamable HTTP** with automatic reconnection:
@@ -185,12 +175,10 @@ MIT. See [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/forgerift/vps-control-mcp/issues)
-- **Security:** Report to security@forgerift.io
-- **Known issues:** [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Issues:** [GitHub Issues](https://github.com/anthropics/vps-control-mcp/issues)
+- **Security:** Report to security@anthropic.com
 - **Documentation:** [Full docs](docs/)
 
 ---
 
-**Built by ForgeRift LLC** | [Model Context Protocol](https://modelcontextprotocol.io/)
+**Built by Anthropic** | [Cloud documentation](https://modelcontextprotocol.io/)
