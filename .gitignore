@@ -1,8 +1,5 @@
 node_modules/
 dist/
 .env
-.env.test
 *.log
 deploy-jobs.json
-.mcp.json
-.commit-msg.txt

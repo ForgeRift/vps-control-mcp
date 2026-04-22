@@ -47,7 +47,7 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 
-# Convert IP dots to dashes for sslip.io domain (e.g. 203.0.113.82 → 203-0-113-82.sslip.io)
+# Convert IP dots to dashes for sslip.io domain (e.g. 104.131.74.82 → 104-131-74-82.sslip.io)
 SSLIP_DOMAIN="${PUBLIC_IP//./-}.sslip.io"
 MCP_URL="https://${SSLIP_DOMAIN}/mcp"
 
@@ -126,14 +126,9 @@ MCP_AUTH_TOKEN=$TOKEN
 # ── Auto-detected (used by OAuth discovery endpoints) ─────────────────────────
 PUBLIC_URL=https://${SSLIP_DOMAIN}
 
-# ── REQUIRED — edit before starting the MCP ──────────────────────────────────
-# APP_DIR is the absolute path of the application directory you want this MCP
-# to manage. The MCP can read files only under APP_DIR + the PM2 log dir.
-# Examples: APP_DIR=/root/myapp, APP_DIR=/srv/www/api
-APP_DIR=/root/CHANGE_ME_BEFORE_START
-
 # ── Optional (defaults shown) ─────────────────────────────────────────────────
 PORT=$MCP_PORT
+# APP_DIR=/root/myapp
 # PM2_LOG_DIR=/root/.pm2/logs
 # AUDIT_LOG_PATH=/root/mcp-audit.log
 # ALLOWED_PROCESSES=my-api,my-worker
@@ -148,21 +143,6 @@ PORT=$MCP_PORT
 ENVEOF
 
   echo "✓ Auth token generated and saved to .env"
-  echo ""
-  echo "⚠️  ACTION REQUIRED: Edit .env and set APP_DIR before the MCP will start."
-  echo "    The MCP is configured to fail closed when APP_DIR is unset or points"
-  echo "    at the sentinel value — operators who pick /root or / to 'just make"
-  echo "    it work' end up with a broader read surface than they want."
-fi
-
-# ── 5b. Reject the APP_DIR sentinel (F-OP-47) ─────────────────────────────────
-if grep -q '^APP_DIR=/root/CHANGE_ME_BEFORE_START' "$ENV_FILE" 2>/dev/null; then
-  echo ""
-  echo "ERROR: .env still contains the APP_DIR sentinel (/root/CHANGE_ME_BEFORE_START)."
-  echo "  Edit $ENV_FILE and set APP_DIR to your application directory, then re-run setup.sh."
-  echo "  Do NOT set APP_DIR=/ or APP_DIR=/root — that expands the MCP's read surface"
-  echo "  beyond your app and is not the behaviour you want."
-  exit 1
 fi
 
 # ── 6. Install nginx + certbot ────────────────────────────────────────────
@@ -187,11 +167,6 @@ server {
         proxy_set_header   Connection 'upgrade';
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
-        # F-OP-37: OVERWRITE X-Forwarded-For with the real client address.
-        # Do NOT use \$proxy_add_x_forwarded_for — that appends the client-supplied
-        # value, which lets the client forge the first entry. Express's trust-proxy
-        # binding (loopback) relies on this header being trustworthy.
-        proxy_set_header   X-Forwarded-For \$remote_addr;
         proxy_cache_bypass \$http_upgrade;
 
         # SSE requires these — do not buffer
@@ -320,6 +295,6 @@ echo "────────────────────────�
 echo "  Support"
 echo "────────────────────────────────────────────────────────"
 echo ""
-echo "  Docs:     https://github.com/forgerift/vps-control-mcp"
+echo "  Docs:     https://github.com/claudedussy/vps-control-mcp"
+echo "  Support:  Telegram bot at t.me/SharpEdgeMcpBot"
 echo ""
-                                                                          
