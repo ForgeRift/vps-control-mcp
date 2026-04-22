@@ -1,16 +1,8 @@
 #!/usr/bin/env node
 // Generates .env.test from the committed fixture at test time.
-// Rationale (F-OP-46, seventh pass): .env.test riding in the public tarball is
-// a secret-leak foot-gun — a careless edit could ship developer tokens to every
-// installed user. .env.test is gitignored; only .env.test.fixture is tracked,
-// and its name makes its purpose unambiguous.
-//
-// If you need to customize test env locally, edit .env.test directly AFTER
-// running `npm test` once — .env.test is regenerated each test run, so your
-// changes will be overwritten. Fork the fixture if you need a persistent local
-// variant.
+// .env.test is gitignored; only .env.test.fixture is tracked.
 
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -25,3 +17,12 @@ if (!existsSync(fixture)) {
 }
 
 copyFileSync(fixture, target);
+
+// Create the test directory structure expected by security.test.ts.
+// APP_DIR in .env.test.fixture is /tmp/testapp -- the tests validate paths
+// within this directory and realpathSync requires them to actually exist.
+mkdirSync('/tmp/testapp', { recursive: true });
+mkdirSync('/tmp/pm2logs', { recursive: true });
+// Stub files used in "passes" test cases
+writeFileSync('/tmp/testapp/out.log', '');           // used by cat/tail/grep/sed tests
+writeFileSync('/tmp/testapp/script.js', '// stub\n'); // used by "node script.js passes"

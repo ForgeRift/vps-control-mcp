@@ -524,6 +524,15 @@ function validatePath(filePath: string): string {
     if (e.code === 'ENOENT') {
       throw new Error(`File not found: "${filePath}".`);
     }
+    if (e.code === 'EACCES') {
+      // Parent directory is not accessible -- treat as path-not-permitted rather
+      // than a crash. On production (running as root) this never fires; in a
+      // test sandbox it surfaces when /root/* is checked by a non-root user.
+      throw new Error(
+        `Path not permitted: "${filePath}" (access denied). ` +
+        `Reads are restricted to: ${ALLOWED_READ_DIRS.join(', ')}`
+      );
+    }
     throw err;
   }
 
@@ -1162,10 +1171,19 @@ const rejectSensitiveArgs: ArgValidator = (args) => {
 // bypass (F-OP-21), and the relative-path traversal bypass (F-OP-33): sort /etc/passwd,
 // cut /etc/group, cat /var/log/auth.log, AND sort ../../etc/group are all blocked.
 // For flags (-x, --x): no check.
+//
+// COUNT_FLAGS: flags that consume the NEXT token as a numeric count/offset, not a path.
+// Without this, "tail -n 50 /app/out.log" would treat "50" as a path argument.
+const COUNT_FLAGS = new Set(['-n', '--lines', '-c', '--bytes', '-m', '--max-count',
+  '--after-context', '--before-context', '--context', '-A', '-B', '-C']);
 const validateArgPath: ArgValidator = (args) => {
+  let skipNext = false;
   for (const arg of args) {
+    if (skipNext) { skipNext = false; continue; }
     if (arg.startsWith('-')) {
       // Flags (-x, --long): no path check.
+      // If the flag consumes the next token as a count, mark it to be skipped.
+      if (COUNT_FLAGS.has(arg)) skipNext = true;
       continue;
     }
     // F-OP-33: resolve relative args against process.cwd() before validatePath.
@@ -1337,27 +1355,35 @@ const validateNpmArgs: ArgValidator = (args) => {
 // F-OP-2: sed -i promotes to RED; this validator is defense-in-depth.
 // F-OP-2: sed Xe<cmd> (e.g. 1ewhoami) and s/.../.../ e-flag both exec shell.
 const validateSedArgs: ArgValidator = (args) => {
+  // Argument structure: sed [flags] <script/expression> [file ...]
+  // The <script> is a sed program string, NOT a file path -- skip it for path checks.
+  // Mirrors the patternConsumed logic in validateGrepArgs.
+  let expressionConsumed = false;
   for (const a of args) {
     // Block in-place modification (also a RED pattern — defense-in-depth)
     if (a === '-i' || a === '--in-place' || /^-[a-zA-Z]*i[a-zA-Z]*$/.test(a)) {
       return `sed -i (in-place edit) is prohibited — use the deploy tool for file modifications.`;
     }
-    // Block sed e command: Xe<cmd> where X is an address (digit, $, ,).
-    // Also matches bare e<cmd> (no address prefix).
-    // Pattern: arg starts with optional line-address chars then 'e' then non-whitespace.
     if (!a.startsWith('-')) {
-      if (/^\d*[$,]?e[^\s]/.test(a)) {
-        return `sed e command is prohibited — it executes shell commands via GNU sed (e.g., "1ewhoami").`;
+      if (!expressionConsumed) {
+        expressionConsumed = true;
+        // Block sed e command: Xe<cmd> where X is an address (digit, $, ,).
+        if (/^\d*[$,]?e[^\s]/.test(a)) {
+          return `sed e command is prohibited — it executes shell commands via GNU sed (e.g., "1ewhoami").`;
+        }
+        // Block substitution e-flag: s/pattern/replace/e
+        if (/^s[^\s]/.test(a) && /\/[a-zA-Z]*e[a-zA-Z]*$/.test(a)) {
+          return `sed substitution e-flag is prohibited — it executes the replacement string as a shell command.`;
+        }
+        // Expression is safe -- skip it (not a file path)
+        continue;
       }
-      // Block substitution e-flag: s/pattern/replace/e (executes replacement as shell command).
-      // Matches the trailing flag section of a substitution: /<flags>e<flags>$/
-      if (/^s[^\s]/.test(a) && /\/[a-zA-Z]*e[a-zA-Z]*$/.test(a)) {
-        return `sed substitution e-flag is prohibited — it executes the replacement string as a shell command.`;
-      }
+      // Remaining non-flag args are file paths -- apply full path security triple.
+      const err = validateArgPath([a]);
+      if (err) return err;
     }
   }
-  // F-OP-20/21: validateArgPath for full path security triple on remaining args.
-  return validateArgPath(args);
+  return null;
 };
 
 // grep: block recursive and PCRE flags.
@@ -1415,7 +1441,18 @@ const validateFindArgs: ArgValidator = (args) => {
       return `find "${a}" is prohibited — it spawns child processes or writes to arbitrary paths, bypassing MCP command validation.`;
     }
   }
-  return validateArgPath(args);
+  // F-OP-20/21: validate only filesystem path args -- not predicates or glob patterns.
+  // Predicates (-name, -type...), logical ops, and quoted/glob values like "*.log"
+  // are expression components, not paths. Passing them to validateArgPath would
+  // cause spurious "file not found" errors on glob patterns.
+  const pathArgs = args.filter(a =>
+    !a.startsWith('-') &&
+    !a.startsWith('"') &&
+    !a.startsWith("'") &&
+    !/[*?[]/.test(a) &&
+    a !== '(' && a !== ')' && a !== '!' && a !== ','
+  );
+  return validateArgPath(pathArgs);
 };
 
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }

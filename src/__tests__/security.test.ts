@@ -483,10 +483,10 @@ describe('validateAgainstAllowlist — default-deny', () => {
   // ── Allowlisted binaries pass ────────────────────────────────────────────
   it('df -h passes', () => expectAllowlisted('df -h'));
   it('free -h passes', () => expectAllowlisted('free -h'));
-  it('ls /root/myapp passes', () => expectAllowlisted('ls /root/myapp'));
-  it('cat /root/myapp/out.log passes', () => expectAllowlisted('cat /root/myapp/out.log'));
-  it('tail -n 50 /root/myapp/out.log passes', () => expectAllowlisted('tail -n 50 /root/myapp/out.log'));
-  it('grep error /root/myapp/out.log passes', () => expectAllowlisted('grep error /root/myapp/out.log'));
+  it('ls /root/myapp passes', () => expectAllowlisted('ls /tmp/testapp'));
+  it('cat /root/myapp/out.log passes', () => expectAllowlisted('cat /tmp/testapp/out.log'));
+  it('tail -n 50 /root/myapp/out.log passes', () => expectAllowlisted('tail -n 50 /tmp/testapp/out.log'));
+  it('grep error /root/myapp/out.log passes', () => expectAllowlisted('grep error /tmp/testapp/out.log'));
   it('pm2 status passes', () => expectAllowlisted('pm2 status'));
   it('pm2 logs passes', () => expectAllowlisted('pm2 logs'));
   it('echo hello passes', () => expectAllowlisted('echo hello'));
@@ -497,7 +497,7 @@ describe('validateAgainstAllowlist — default-deny', () => {
   it('uptime passes', () => expectAllowlisted('uptime'));
   it('date passes', () => expectAllowlisted('date'));
   it('ss -tulpn passes', () => expectAllowlisted('ss -tulpn'));
-  it('du -sh /root/myapp passes', () => expectAllowlisted('du -sh /root/myapp'));
+  it('du -sh /root/myapp passes', () => expectAllowlisted('du -sh /tmp/testapp'));
 
   // ── Non-allowlisted binaries are blocked ─────────────────────────────────
   it('less is not on allowlist', () => expectNotAllowlisted('less /etc/passwd'));
@@ -550,7 +550,7 @@ describe('validateAgainstAllowlist — default-deny', () => {
   it('node --eval is blocked', () => {
     expectInvalidArgs('node --eval "process.exit(0)"');
   });
-  it('node script.js passes', () => expectAllowlisted('node script.js'));
+  it('node script.js passes', () => expectAllowlisted('node /tmp/testapp/script.js'));
 
   // ── npm/pnpm sub-command allowlist ────────────────────────────────────────
   it('npm install is blocked', () => {
@@ -628,7 +628,7 @@ describe('F-OP-2 — sed e command and -i promoted to RED', () => {
     );
   });
   it('plain sed s/pattern/replace/g passes', () => {
-    assert.doesNotThrow(() => validateAgainstAllowlist('sed s/foo/bar/g /root/myapp/out.log'));
+    assert.doesNotThrow(() => validateAgainstAllowlist('sed s/foo/bar/g /tmp/testapp/out.log'));
   });
 });
 
@@ -646,7 +646,7 @@ describe('F-OP-3 — find -exec promoted to RED', () => {
     );
   });
   it('plain find -name passes', () => {
-    assert.doesNotThrow(() => validateAgainstAllowlist('find /root/myapp -name "*.log"'));
+    assert.doesNotThrow(() => validateAgainstAllowlist('find /tmp/testapp -name "*.log"'));
   });
 });
 
@@ -676,10 +676,10 @@ describe('F-OP-4 — grep -r/-R recursive blocked', () => {
     );
   });
   it('grep -n (non-recursive) passes', () => {
-    assert.doesNotThrow(() => validateAgainstAllowlist('grep -n error /root/myapp/out.log'));
+    assert.doesNotThrow(() => validateAgainstAllowlist('grep -n error /tmp/testapp/out.log'));
   });
   it('grep with pattern and file passes', () => {
-    assert.doesNotThrow(() => validateAgainstAllowlist('grep TOKEN /root/myapp/out.log'));
+    assert.doesNotThrow(() => validateAgainstAllowlist('grep TOKEN /tmp/testapp/out.log'));
   });
 });
 
@@ -766,7 +766,7 @@ describe('F-OP-19 — node --inspect* blocked (V8 remote debugger = root RCE)', 
   it('node --cpu-prof is blocked', () => expectInvalidArgs('node --cpu-prof script.js'));
   it('node --heap-prof is blocked', () => expectInvalidArgs('node --heap-prof script.js'));
   it('node script.js still passes', () => {
-    assert.doesNotThrow(() => validateAgainstAllowlist('node script.js'));
+    assert.doesNotThrow(() => validateAgainstAllowlist('node /tmp/testapp/script.js'));
   });
   it('node --version still passes', () => {
     assert.doesNotThrow(() => validateAgainstAllowlist('node --version'));
