@@ -637,7 +637,7 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
 
   // --- Shell invocation ---
   { pattern: /\|\s*(sh|bash|zsh|fish|dash|ksh|csh)\b/, category: 'shell-invoke', reason: 'Piping to shell is prohibited.' },
-  { pattern: /\b(bash|sh|zsh|fish|csh|ksh|dash)\s+-c\b/, category: 'shell-invoke', reason: 'Shell invocation with -c is prohibited.' },
+  { pattern: /\b(bash|sh|zsh|fish|csh|ksh|dash)[^\n]*\s+-c\b/, category: 'shell-invoke', reason: 'Shell invocation with -c is prohibited.' },
   { pattern: /`[^`]*`/,                     category: 'shell-invoke', reason: 'Backtick subshells are prohibited.' },
   { pattern: /\$\([^)]*\)/,                 category: 'shell-invoke', reason: '$() subshells are prohibited.' },
 
@@ -790,6 +790,20 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // ─── Base64 Decode-to-Exec ───────────────────────────────────────────────────
   { pattern: /\bbase64\b.*-d\b/,         category: 'base64-exec',     reason: 'base64 -d (decode) is prohibited (obfuscation layer for shell injection).' },
   { pattern: /\bopenssl\s+(?:base64|enc)\b.*-d\b/, category: 'base64-exec', reason: 'openssl base64 decode is prohibited (obfuscation layer).' },
+  // ── C5 (S60): Kernel module operations ─────────────────────────────────
+  { pattern: /\bmodprobe\b/,              category: 'system-state',    reason: 'Kernel module loading (modprobe) is prohibited (C5).' },
+  { pattern: /\binsmod\b/,               category: 'system-state',    reason: 'Kernel module insertion (insmod) is prohibited (C5).' },
+  { pattern: /\brmmod\b/,                category: 'system-state',    reason: 'Kernel module removal (rmmod) is prohibited (C5).' },
+  { pattern: /\bdepmod\b/,               category: 'system-state',    reason: 'Kernel module dependency rebuild (depmod) is prohibited (C5).' },
+  // ── C7 (S60): Dynamic-linker env-var injection ───────────────────────────
+  { pattern: /\bLD_PRELOAD\b/,           category: 'code-exec',       reason: 'LD_PRELOAD is prohibited (dynamic-linker injection, C7).' },
+  { pattern: /\bLD_AUDIT\b/,             category: 'code-exec',       reason: 'LD_AUDIT is prohibited (dynamic-linker audit injection, C7).' },
+  { pattern: /\bLD_LIBRARY_PATH\b/,      category: 'code-exec',       reason: 'LD_LIBRARY_PATH is prohibited (dynamic-linker path injection, C7).' },
+  // ── C10 (S60): Anti-forensics / backup-destruction toolkit ──────────────
+  { pattern: /\bvssadmin\b/i,            category: 'data-destruction', reason: 'vssadmin is prohibited (VSS shadow-copy manipulation, C10).' },
+  { pattern: /\bwbadmin\b/i,             category: 'data-destruction', reason: 'wbadmin is prohibited (Windows Backup destruction, C10).' },
+  { pattern: /\bwevtutil\b/i,            category: 'data-destruction', reason: 'wevtutil is prohibited (Windows Event Log tampering, C10).' },
+  { pattern: /\bntdsutil\b/i,            category: 'data-destruction', reason: 'ntdsutil is prohibited (Active Directory database extraction, C10).' },
 ];
 
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
