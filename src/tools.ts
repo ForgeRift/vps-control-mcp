@@ -921,7 +921,14 @@ const BLOCKED_MANUAL_STEPS: Record<string, string> = {
   'board-reviewed':                  'Review the safety board assessment above and perform this operation directly via SSH.',
 };
 
-interface HardBlockedPattern { pattern: RegExp; category: string; }
+interface HardBlockedPattern {
+  pattern?:  RegExp;
+  // D2: argv-aware matcher — receives the raw command string and the
+  // tokenized argv array. Use instead of `pattern` when the check
+  // requires inspecting specific argument positions or flag combinations.
+  matcher?:  (cmd: string, argv: string[]) => boolean;
+  category:  string;
+}
 
 const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   // ── Category 1: Recursive / bulk file deletion ────────────────────────────
@@ -999,15 +1006,64 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   { pattern: /\bk3s-uninstall\.sh\b/i,                                         category: 'container-nuclear' },
 ];
 
-function checkHardBlocked(cmd: string): HardBlockedPattern | null {
-  const lines = cmd.split(/\r?\n/).filter(l => l.trim().length > 0);
-  for (const line of lines) {
-    for (const entry of HARD_BLOCKED_PATTERNS) {
-      if (entry.pattern.test(line)) return entry;
+// D2: POSIX shlex-style tokenizer. Handles single quotes, double quotes,
+// and backslash escapes. Shell metacharacters (| & ; ( ) < >) are treated
+// as token boundaries so argv reflects the target command's argument list.
+// Used by checkHardBlocked to enable argv-aware pattern matchers (Phase 3).
+function tokenizeCommand(cmd: string): string[] {
+  const tokens: string[] = [];
+  let cur = '';
+  let i = 0;
+
+  while (i < cmd.length) {
+    const ch = cmd[i];
+
+    if (ch === "'") {
+      // Single-quoted: everything literal until closing '
+      i++;
+      while (i < cmd.length && cmd[i] !== "'") cur += cmd[i++];
+      // skip closing '
+    } else if (ch === '"') {
+      // Double-quoted: backslash escapes " \ ` $ and newline
+      i++;
+      while (i < cmd.length && cmd[i] !== '"') {
+        if (cmd[i] === '\\' && i + 1 < cmd.length) {
+          const next = cmd[i + 1];
+          if ('"\\`$\n'.includes(next)) { cur += next; i += 2; continue; }
+        }
+        cur += cmd[i++];
+      }
+      // skip closing "
+    } else if (ch === '\\' && i + 1 < cmd.length) {
+      // Outside quotes: backslash escapes next char
+      cur += cmd[i + 1];
+      i += 2;
+      continue;
+    } else if (/[\s|&;()<>]/.test(ch)) {
+      // Whitespace or shell metachar: flush current token
+      if (cur.length > 0) { tokens.push(cur); cur = ''; }
+    } else {
+      cur += ch;
     }
+    i++;
   }
+
+  if (cur.length > 0) tokens.push(cur);
+  return tokens;
+}
+
+function checkHardBlocked(cmd: string): HardBlockedPattern | null {
+  const argv = tokenizeCommand(cmd);
+  const lines = cmd.split(/\r?\n/).filter(l => l.trim().length > 0);
   for (const entry of HARD_BLOCKED_PATTERNS) {
-    if (entry.pattern.test(cmd)) return entry;
+    if (entry.matcher) {
+      if (entry.matcher(cmd, argv)) return entry;
+    } else if (entry.pattern) {
+      for (const line of lines) {
+        if (entry.pattern.test(line)) return entry;
+      }
+      if (entry.pattern.test(cmd)) return entry;
+    }
   }
   return null;
 }

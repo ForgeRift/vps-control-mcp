@@ -2,7 +2,7 @@
 // Generates .env.test from the committed fixture at test time.
 // .env.test is gitignored; only .env.test.fixture is tracked.
 
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -24,5 +24,15 @@ copyFileSync(fixture, target);
 mkdirSync('/tmp/testapp', { recursive: true });
 mkdirSync('/tmp/pm2logs', { recursive: true });
 // Stub files used in "passes" test cases
+// D7: create audit log dir inside repo (only non-/tmp writable location in CI sandbox)
+const testLogDir = join(repoRoot, 'logs');
+mkdirSync(testLogDir, { recursive: true });
+// Override AUDIT_LOG_PATH in .env.test to the real absolute path
+const envTest = readFileSync(target, 'utf8');
+writeFileSync(target, envTest.replace(
+  /^AUDIT_LOG_PATH=.*$/m,
+  `AUDIT_LOG_PATH=${join(testLogDir, 'mcp-audit.log')}`
+));
+
 writeFileSync('/tmp/testapp/out.log', '');           // used by cat/tail/grep/sed tests
 writeFileSync('/tmp/testapp/script.js', '// stub\n'); // used by "node script.js passes"

@@ -11,7 +11,7 @@ import { __TEST_ONLY } from '../tools.js';
 const { validateCommand } = __TEST_ONLY;
 
 function assertBlocked(cmd: string, label?: string): void {
-  assert.throws(() => validateCommand(cmd), undefined, `Expected BLOCKED: ${label ?? cmd}`);
+  assert.throws(() => validateCommand(cmd), `Expected BLOCKED: ${label ?? cmd}`);
 }
 
 function assertAllowed(cmd: string, label?: string): void {
