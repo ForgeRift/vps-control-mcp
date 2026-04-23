@@ -158,6 +158,8 @@ Command-surface destination-path protection (D10) blocks `cp`, `mv`, `install`, 
 
 The same sensitive-prefix list applies to shell-redirect destinations (`>`, `>>`) via M7-extended. GNU `--target-directory` / `-t` (short form and glued short-option clusters like `-fvt`) are handled by D10's argv-aware matcher. Env-var and tilde expansion (`$HOME`, `~`, `%SystemRoot%`) in destination paths fail closed.
 
+**Operator override.** If legitimate workflows require writes under one of the sensitive prefixes above — backup-restore scripts copying into `/home/user/`, deploy tooling populating `~/.config/...`, CI runners writing under `/home/runner/...` — the `BYPASS_BINARIES` environment variable (see *Advanced Feature: BYPASS_BINARIES* below) can demote specific `<binary>:<category>` pairs from hard-block to AI-reviewed. Example: `BYPASS_BINARIES=cp:sensitive-path-write,mv:sensitive-path-write,install:sensitive-path-write` re-enables `cp` / `mv` / `install` writes under `/home/*` while keeping redirect (`> /home/.../authorized_keys`) and `dd of=/home/...` blocked. Each bypass hit is logged as `[SECURITY-BYPASS]` in the audit stream.
+
 ### Security Release Notes — v1.10.x
 
 | Version | Closed | Scope |
@@ -166,8 +168,11 @@ The same sensitive-prefix list applies to shell-redirect destinations (`>`, `>>`
 | v1.10.1 | F-OP-66 | M7-extended redirect no-`..` form (`> ./etc/passwd`) |
 | v1.10.2 | F-OP-68 / F-OP-69 / F-OP-70 | LT normalizePath separator consistency; LT PS colon-syntax (`-Destination:<path>`) token-split; VPS `/home` source-side false-positive elimination |
 | v1.10.3 | F-OP-71 / F-OP-74 / F-OP-75 | **VPS `/home` destination-side protection restored** — v1.10.2 removed `/home` from the cp/mv backstop to fix source-side false-positives, but D10's SENSITIVE regex did not then include `/home`, silently dropping destination-side coverage for `~/.ssh/authorized_keys`, `~/.bashrc`, `~/.config/systemd/user/*.service`, etc. Also: LT `SENSITIVE_WIN` unified across D10 and M7-extended (F-OP-74); LT `tools_BRANCH.ts` / `tools_HEAD.ts` merge-conflict artifacts removed (F-OP-75). |
+| v1.10.4 | F-OP-83 / F-OP-84 | SECURITY.md D10 subsection now points operators at `BYPASS_BINARIES` as the documented override for legitimate `/home` copy / redirect workflows (F-OP-83); `.githooks/pre-commit` added (with `.gitignore` broadened to cover `.env.test*` and `*.bak`) to enforce the merge-artifact / backup-file guard beyond the .gitignore-only posture of v1.10.3 (F-OP-84). |
 
 **Known pre-v1.10.3 bypass scope:** operators running v1.10.0–v1.10.2 of VPS could not rely on destination-side `/home` write protection via the synchronous layer; the tier-3 AI review would still flag `authorized_keys` as high-risk but AI layers fail open when `ANTHROPIC_API_KEY` is unset. Upgrading to v1.10.3 closes this gap.
+
+**Known pre-v1.10.4 bypass scope:** v1.10.3 relied on `.gitignore`-only patterns to prevent re-introduction of merge-conflict and backup artifacts. A developer using `git add -f` or a file name outside the declared shapes (e.g. `tools_LOCAL.ts`, `foo.ts.orig.1`) could land artifacts through the normal commit flow with no defense. v1.10.4 adds `.githooks/pre-commit` that refuses the commit outright, with `package.json` `prepare` script wiring `core.hooksPath` to `.githooks` automatically on `npm install`. The guard is defense-in-depth; no credential or command-surface security gap is affected by the pre-v1.10.4 state.
 
 ## Session-Level Security Controls
 

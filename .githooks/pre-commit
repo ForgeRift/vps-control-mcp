@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# F-OP-84 (v1.10.4): refuse commits that include merge-conflict or backup artifacts.
+# The .gitignore patterns catch filenames at `git add` time, but are bypassable via
+# `git add -f` or by names outside the shape patterns. This hook enforces the intent
+# on every commit; there is no normal-flow way to land these artifacts.
+
+PATTERN='(_BRANCH|_HEAD|_LOCAL|_REMOTE|_BASE|_MERGED|_YOURS|_THEIRS)\.ts$|\.orig$|\.orig\.[0-9]+$|\.rej$|\.bak$|\.swp$|~$|^\.env\.test$'
+
+matches=$(git diff --cached --name-only | grep -E "$PATTERN" || true)
+
+if [ -n "$matches" ]; then
+  echo "[pre-commit] Refusing to commit merge-conflict / backup / test-env artifacts:"
+  echo ""
+  echo "$matches" | sed 's/^/  /'
+  echo ""
+  echo "Remove them: git restore --staged <file>; rm <file>"
+  echo "If intentional (rare), bypass with --no-verify and document why in the commit body."
+  exit 1
+fi

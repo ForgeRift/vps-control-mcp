@@ -1,5 +1,24 @@
 node_modules/
 dist/
 .env
+.env.test
+.env.test.local
 *.log
+*.bak
+*~
 deploy-jobs.json
+
+# F-OP-84 / F-OP-85 (v1.10.4): merge-conflict and backup artifacts.
+# Patterns kept in sync with .githooks/pre-commit for defense-in-depth.
+src/*_BRANCH.ts
+src/*_HEAD.ts
+src/*_LOCAL.ts
+src/*_REMOTE.ts
+src/*_BASE.ts
+src/*_MERGED.ts
+src/*_YOURS.ts
+src/*_THEIRS.ts
+*.orig
+*.orig.*
+*.rej
+*.swp
