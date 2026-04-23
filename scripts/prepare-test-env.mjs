@@ -21,7 +21,7 @@ copyFileSync(fixture, target);
 // Create the test directory structure expected by security.test.ts.
 // APP_DIR in .env.test.fixture is /tmp/testapp -- the tests validate paths
 // within this directory and realpathSync requires them to actually exist.
-mkdirSync('/tmp/testapp', { recursive: true });
+mkdirSync('/tmp/testapp_user', { recursive: true });
 mkdirSync('/tmp/pm2logs', { recursive: true });
 // Stub files used in "passes" test cases
 // D7: create audit log dir inside repo (only non-/tmp writable location in CI sandbox)
@@ -34,5 +34,5 @@ writeFileSync(target, envTest.replace(
   `AUDIT_LOG_PATH=${join(testLogDir, 'mcp-audit.log')}`
 ));
 
-writeFileSync('/tmp/testapp/out.log', '');           // used by cat/tail/grep/sed tests
-writeFileSync('/tmp/testapp/script.js', '// stub\n'); // used by "node script.js passes"
+writeFileSync('/tmp/testapp_user/out.log', '');           // used by cat/tail/grep/sed tests
+writeFileSync('/tmp/testapp_user/script.js', '// stub\n'); // used by "node script.js passes"

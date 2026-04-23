@@ -284,3 +284,225 @@ All five findings addressed in commit `security: close S62 D10 short-option clus
 | F-OP-64 | N/A | LT only; see LT review. | — |
 | F-OP-65 | MEDIUM | Part A — cluster-aware `-t` scan: loop now checks `a.includes('t')` for single-letter clusters (`-fvt`, `-Dt`, `-vft`) before the existing `-t`/`-t<path>`/`--target-directory` branches. Part B — `BLOCKED_PATTERNS` backstop broadened: `cp`/`mv` patterns extended to cover `/boot`, `/lib`, `/lib64`, `/opt`, `/home`; `install` pattern added as an equivalent backstop. | `bypass-corpus.test.ts` — `F-OP-65` suite (5 blocks + 1 benign) |
 | F-OP-66 | LOW | M7-extended fast-path `if (!rawPath.includes('..')) return false` removed. `> ./etc/passwd` and `> ././boot/grub/grub.cfg` now reach normalization and are flagged. VPS execFile discards redirects so this is defense-in-depth hardening. | `bypass-corpus.test.ts` — `F-OP-66` suite (3 blocks + 2 benign) |
+
+---
+
+## Tenth Pass — S63 — 2026-04-22
+
+**Target:** `forgerift/vps-control-mcp` v1.10.1 (paired with `forgerift/local-terminal-mcp` v1.10.1)
+**Scope:** The five code surfaces touched by the S62 v1.10.1 fix drop — LT D10 PS branch (`src/tools.ts` ~lines 872–888, isPS block gating `-LiteralPath`, param-prefix regex, and the `normalizePath` sep change), VPS D10 cluster-aware `-t` scan (`src/tools.ts` ~lines 1148–1158), VPS `BLOCKED_PATTERNS` broadening (~lines 713–716), LT M7-extended no-`..` fast-path removal + SENSITIVE_WIN relaxation (~lines 905–922), VPS M7-extended fast-path removal (~lines 1176–1192).
+**Method:** Four-persona audit (Red Team / Prompt-Injection / Supply-Chain / Consumer-Safety) against the live `src/tools.ts` in both repos at v1.10.1. Findings key to exact line numbers verified from disk before writing.
+**Status at submission:** Findings open. Recommendation is **block ship on LT** pending F-OP-68 and F-OP-69; VPS carries a MEDIUM workflow-breaking FP (F-OP-70) to pair into the same drop.
+
+The v1.10.1 drop closed F-OP-62 (`-LiteralPath` gated on `isPathCmd`), F-OP-64 (PS parameter abbreviation), F-OP-65 (short-option cluster + install backstop), and F-OP-66 (M7-extended no-`..` form) as documented. The F-OP-63 fix itself introduces a CRITICAL regression in LT (F-OP-68), the F-OP-64 regex expansion leaves a trivial PowerShell colon-syntax bypass unclosed (F-OP-69), and the F-OP-65 backstop extension adds a false-positive block on benign read workflows (F-OP-70). Findings numbered F-OP-68 onward (F-OP-67 was an S62 INFO/CLEAN credit and is not renumbered).
+
+### Severity Summary
+
+| ID | Severity | Area | Product | One-liner |
+|---|---|---|---|---|
+| F-OP-68 | CRITICAL | D10 | LT | F-OP-63 fix regressed NIX-path matching. `normalizePath` at line 844 forces `sep = '\\'` unconditionally; input `/etc/passwd` now normalizes to `\etc\passwd\`, which matches neither `SENSITIVE_WIN` (requires `(windows\|…)` after `\`) nor `SENSITIVE_NIX` (requires `/` separators — line 841). `Copy-Item -Destination /etc/passwd src.txt` and `cp file /etc/passwd` (and the S61 F-OP-52 regression case `cp file /tmp/../etc/passwd`) now silently bypass D10 on cross-platform LT (Linux/Mac/WSL where PowerShell on Linux is common). Directly re-opens the F-OP-52 bypass class that v1.10.0 closed. |
+| F-OP-69 | CRITICAL | D10 | LT | PowerShell colon-syntax parameter form `-Param:Value` evades every isPS regex in the v1.10.1 expansion. The F-OP-64 regex `/^-d(?:e(?:s(?:t(?:i(?:n(?:a(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$/i` anchors with `$`, so `-Destination:C:\Windows\System32\evil.dll` does not match. Loop continues; positional fallback picks the (benign) src.txt as dest; `isSensitive` returns false. Same bypass on `-LiteralPath:…`, `-Path:…`, `-FilePath:…`, and on abbreviations (`-D:…`, `-P:…`, `-F:…`). PowerShell colon syntax is the default form produced by tab-completion, hashtable splat resolution, and VS Code PowerShell extension code-actions — mainstream admin invocation. No backstop catches bare `Out-File -LiteralPath:path` / `Set-Content -Path:path`. |
+| F-OP-70 | MEDIUM | BLOCKED_PATTERNS | VPS | F-OP-65 backstop extension at lines 714–716 greedy-matches source-side paths, not just destinations. `cp /home/user/data.csv /tmp/`, `cp /opt/staging/app.jar /tmp/`, `mv /lib/modules/foo.ko /tmp/backup/` all worked in v1.10.0 and are blocked in v1.10.1. The added directories (`/boot`, `/lib`, `/lib64`, `/opt`, `/home`) include `/home`, whose reads are common in backup, ETL, and deploy-staging workflows. The reason text (`'Copying to system/user directories is prohibited.'`) does not clarify that a source-side path triggered the block, which will drive user confusion. |
+
+### CLEAN findings (credit where due)
+
+- **C16** LT F-OP-62 fix correctly gates `-LiteralPath` on `isPathCmd` only (line 880). For `Copy-Item -LiteralPath benign -Destination sensitive`, the branch doesn't fire because `isCopyMove` is true and `isPathCmd` is false; the loop continues and the `-Destination` branch catches. Verified trace matches bypass-corpus F-OP-62 suite.
+- **C17** LT F-OP-64 regex expansion at lines 878 and 882 correctly matches every unambiguous prefix of `-Destination` / `-Path` / `-FilePath` (`-D`, `-De`, `-Des`, …; `-P`, `-Pa`, `-Pat`; `-F`, `-Fi`, …). Space-separated param form is fully closed — the remaining bypass (F-OP-69) is strictly the colon-suffix form.
+- **C18** VPS F-OP-65 cluster detector `/^-[a-zA-Z]+$/.test(a) && a.includes('t')` (line 1151) correctly fires on all letter-only clusters containing lowercase `t` (`-fvt`, `-vft`, `-Dt`, `-st`, `-ts`). The regex `^-[a-zA-Z]+$` intrinsically excludes `--`-prefixed and arg-bearing forms (`-t/etc/`, `--target-directory=/etc/`), so the cluster check does not shadow the existing `-t`, `-t<path>`, and `--target-directory` branches that follow on lines 1154–1157. No ordering bug.
+- **C19** VPS F-OP-65 install backstop (line 716) and D10 matcher combine to catch `install -T /etc/passwd src` — the case where `-T` (treat-dest-as-file) is capitalised, the cluster check correctly skips (no lowercase `t`), positional fallback picks the wrong arg, but the BLOCKED_PATTERNS regex catches `/etc/` in the command string. Layered defense works.
+- **C20** VPS cluster check `a.includes('t')` is case-sensitive; `-DT` (capital T) does not match. The only lowercase-`t` flag across `cp` / `mv` / `install` is `-t` (target-directory), so `includes('t')` does not false-positive-match any benign cluster for those three binaries. Verified against each man page.
+- **C21** LT M7-extended fast-path removal (line 909) adds no FP on benign forms: `cat x > ./out.txt`, `echo x > ./build/report.log`, `echo x > /tmp/report.log`, `> ../sibling/file.txt` all normalize to non-sensitive paths and pass. Normalization is bounded by path length — no ReDoS exposure.
+- **C22** LT M7-extended `SENSITIVE_WIN` relaxation (line 919) — drive-letter made optional — correctly catches `echo x > ./Windows/System32/drivers/etc/hosts` (normalized `/Windows/System32/drivers/etc/hosts/`). The theoretical FP on paths like `./WindowsPhone/...` is not a real-world operational concern.
+- **C23** Shared M7-extended normalizer resolves interleaved `./` and `../` correctly: `> ./././etc/passwd` → `/etc/passwd/` → SENSITIVE matches; `> /etc/../var/etc/passwd` → `/var/etc/passwd/` → correctly does NOT match (actual shell resolution is `/var/etc/passwd`). Normalization semantics align with POSIX shell path resolution.
+- **C24** LT bypass-corpus F-OP-62, F-OP-63, F-OP-64 suites and VPS F-OP-65, F-OP-66 suites were added to `src/__tests__/bypass-corpus.test.ts` in v1.10.1. The LT F-OP-63 suite (line 356–365) only exercises Windows-keyword paths; no NIX-keyword test was added, which is why F-OP-68 slipped past verification. The test-corpus expansion discipline is correct; the coverage gap is the finding.
+
+### Persona Reviews
+
+**Red Team (offensive path planning).** The v1.10.1 drop closed every surface the S62 prompt identified — `-LiteralPath` gated, forward-slash Windows paths matched, PS parameter abbreviation covered, cluster-aware `-t` scan added, install backstop extended, M7-extended fast-path removed. In each closed case, the adversarial attempts in the S62 fix-acceptance list now block as documented. The failure mode is characteristic: *the fix itself is the new attack surface.* F-OP-68 is a one-line regression introduced by the F-OP-63 remediation. The commit comment on line 844 (`F-OP-63: always normalize to backslash so SENSITIVE_WIN matches /Windows/... forward-slash form`) shows the author reasoning about Windows paths exclusively and missing that `SENSITIVE_NIX` on line 841 requires `/` separators. The S62 bypass-corpus F-OP-63 suite only tests Windows paths (line 356–365), so CI was green — but the S61 F-OP-52 suite at line 305–308 (including `cp file /tmp/../etc/passwd`) should have failed. Either that test suite was not rerun, or it was rerun and the failure ignored. Either way, a closed bypass is re-open. **F-OP-69 is the preexisting gap the F-OP-64 fix did not close.** PowerShell accepts `-Param:Value` as a canonical alternative to `-Param Value` — it is the form produced by `Get-Help -Full` example output, by `Splat` operator resolution, and by VS Code PowerShell extension code-actions. Any admin who learned PowerShell from a book in the last 10 years writes it. The F-OP-64 regex uses `$` anchor, so every colon-form token fails the match and falls through to positional fallback. With a single-positional source arg (`src.txt`), the matcher picks src.txt as dest and D10 returns false. No backstop covers this for the isPathCmd cmdlets (`Out-File`, `Set-Content`, `Add-Content`, `New-Item`), which are the write primitives that an attacker targets. PoC payloads are one token-edit away from the existing F-OP-62/F-OP-64 bypass corpus — they would be found in the first hour of red-team prodding. **F-OP-70 is a workflow regression, not a bypass.** But it is a visible change: a plain admin running `cp /opt/staging/app.jar /tmp/deploy.jar` gets a hard-block with a message that does not explain the source-side trigger. Expect help-desk traffic and user workarounds that silently tunnel via other matchers (e.g., `cat /opt/staging/app.jar > /tmp/deploy.jar`, which is caught by the `>\s*\/` pattern but with a different reason text).
+
+**Prompt Injection Specialist.** No new prompt-injection surface. All v1.10.1 changes are static regex/matcher logic with no dynamic interpolation into L2/L3 prompts. Nonce discipline (C5) preserved; `commandRiskMeta` unchanged in this patch. One operational note tied to F-OP-68: commands of the form `cp file /etc/passwd` now reach L2/L3 without the D10 pre-classification, so the L1 hard-block degrades to LLM catch-up. The Haiku classifier may catch the semantic match via the `<cmd>` block, but relying on a probabilistic classifier to cover a deterministic L1 regression is a measurable downgrade of defense-in-depth posture. Recommend (non-blocking) surfacing a `d10_missed_nix_dest: true` hint into the L2 prompt when an argv contains a DEST_CMDS cmdlet and a `/`-prefixed token that normalizes to a SENSITIVE_NIX-anchored path, independent of whether the current D10 regex fires — covers the regression by construction, not by luck.
+
+**Supply Chain Threat Analyst.** Nothing in v1.10.1 touches model selection (`_ALLOWED_L3_MODELS` unchanged), BYPASS_BINARIES parsing, or audit logging. No new env vars, no new config surface, no new dependency pulls. F-OP-68 is a pure code-logic regression, not a supply-chain vulnerability — but it is the second consecutive pass where a security fix is the new bypass (S62's F-OP-62/63 were regressions of S61's F-OP-49 fix shape; S63's F-OP-68 is a regression of S61's F-OP-52 fix shape). Recommend making `bypass-corpus.test.ts` CI-mandatory with a minimum test count floor so that silently deleting a regression test fails CI. Also recommend that every matcher-editing commit include a row in the test file reproducing the *entire* closed-bypass class (both Windows and NIX forms), not just the case the new fix targets — the LT F-OP-63 suite covering only Windows-keyword paths is the root cause of F-OP-68 slipping. Supply-chain posture is otherwise unchanged and solid.
+
+**Consumer Product Safety Reviewer.** Two user-visible behavior changes in v1.10.1: (a) F-OP-70's broadened backstop will surprise admins with working `cp /home/...`, `cp /opt/...`, `cp /boot/...`, `cp /lib/...` read workflows from v1.10.0. SECURITY.md does not flag this. The block-reason text says `'Copying to system/user directories is prohibited.'` — but the command `cp /opt/staging/app.jar /tmp/deploy.jar` writes to `/tmp`, not a system directory; the source-side trigger is invisible to the reader. Fix is to either narrow the regex (preferred — `/home` in particular doesn't belong in a source-side backstop) or improve the reason-text to clarify "source path references a system/user directory". (b) F-OP-68 means the consumer-facing claim "D10 blocks cp/mv/Copy-Item writing to OS-critical paths" is false for NIX-keyed targets on cross-platform LT. A user running PowerShell on Linux or WSL under the reasonable assumption that D10 covers `/etc/` destinations has an inaccurate mental model. SECURITY.md cannot document the v1.10.1 security surface truthfully until F-OP-68 is closed. Ship-blocking on LT.
+
+### Recommendation
+
+**Ship a coordinated v1.10.2 patch covering both LT and VPS in a single session** — mirrors the S61/S62 paired-drop pattern that worked cleanly. All three findings (F-OP-68 through F-OP-70) remediated in one fix pass; single version bump on both packages; single paired entry in the S63 fixes table on both ADVERSARIAL_REVIEW.md files.
+
+Severity-based reasoning, independent of release strategy:
+
+- **LT alone would BLOCK ship** on F-OP-68 (CRITICAL NIX-path regression re-opening F-OP-52) and F-OP-69 (CRITICAL PS colon-syntax bypass across every isPS regex). Both are surgical fixes in adjacent ~20-line regions.
+- **VPS alone would SHIP** with F-OP-70 (MEDIUM FP regression) as a fast-follow. Rolling it into the paired patch is cheaper than queuing it for v1.10.3.
+
+The CLEAN findings (C16–C24) confirm every S62-closed finding (F-OP-62/64/65/66) survives adversarial scrutiny. The regressions are surgical: one over-narrow separator choice (`sep = '\\'` forced), one under-anchored regex (`$` anchor without colon-suffix accommodation), and one over-eager backstop (`/home` in source-side regex). Each is a one-to-three-line fix.
+
+### S63 Fix Prompt — coordinated v1.10.2 (both products, single session)
+
+The following prompt is formatted for direct use in one coding session covering both repos:
+
+```
+You are remediating S63 adversarial findings F-OP-68, F-OP-69, F-OP-70 across BOTH `forgerift/local-terminal-mcp` v1.10.1 and `forgerift/vps-control-mcp` v1.10.1 in a single coordinated session. Ship both as v1.10.2 (patch-level — matcher-semantics tightening, no config-surface break). Phase order is chosen to keep the tree in a coherent state at every phase boundary.
+
+Repos:
+  LT:  C:\Users\ddeni\Desktop\claudedussy\local-terminal-mcp
+  VPS: C:\Users\ddeni\Desktop\claudedussy\vps-control-mcp
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 1 — LT D10 NIX-path regression (F-OP-68 CRITICAL)
+File: local-terminal-mcp/src/tools.ts, lines 840–862.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Root cause: `normalizePath` forces `sep = '\\'`. Input `/etc/passwd` normalizes to `\etc\passwd\`, matching neither `SENSITIVE_WIN` (requires `\\(windows|...)` pattern) nor `SENSITIVE_NIX` (requires `/` separators). The F-OP-63 fix closed the forward-slash Windows-path bypass but re-opened the F-OP-52 NIX-path bypass class.
+
+Fix: choose a single canonical separator (forward slash) and update BOTH regexes to use it. This preserves the F-OP-63 close AND restores NIX-path matching in one change.
+
+  In normalizePath at line 844, change:
+    const sep = '\\'; // F-OP-63: always normalize to backslash ...
+  to:
+    const sep = '/'; // F-OP-68: canonical `/` so both SENSITIVE_WIN (with `/` variant) and SENSITIVE_NIX match consistently
+
+  Update SENSITIVE_WIN at line 840 from:
+    const SENSITIVE_WIN = /^[A-Za-z]?:?\\(windows|system32|syswow64|program files|programdata)/i;
+  to:
+    const SENSITIVE_WIN = /^(?:[A-Za-z]:)?\/(windows|system32|syswow64|program files|programdata)/i;
+
+  SENSITIVE_NIX at line 841 unchanged.
+
+  Adjust the trailing-separator append at line 860 from `n + '\\'` to `n + '/'`:
+    const nSlash = (n.endsWith('/') || n.endsWith('\\')) ? n : n + '/';
+
+Phase 1 acceptance — all MUST block at L1:
+  • `cp file /tmp/../etc/passwd`                                    (S61 F-OP-52 regression — MUST pass)
+  • `Copy-Item -Destination /etc/passwd src.txt`
+  • `copy file /etc/shadow`
+  • `Copy-Item src.txt /Windows/System32/evil.dll`                  (S62 F-OP-63 — MUST still block)
+  • `copy src.txt /Windows/System32/evil.dll`
+  • `Copy-Item src.txt C:/Windows\System32/evil.dll`                (mixed separators — MUST still block)
+  • `Copy-Item -Destination C:\Windows\System32\evil.dll src.txt`   (backslash form — MUST still block)
+
+Phase 1 benign — MUST NOT block:
+  • `copy src.txt C:\Users\user\file.txt`
+  • `Copy-Item src.txt /Users/user/file.txt`
+  • `cp file /tmp/output.txt`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 2 — LT D10 PowerShell colon-syntax bypass (F-OP-69 CRITICAL)
+File: local-terminal-mcp/src/tools.ts, lines 875–887.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Root cause: PowerShell accepts `-Param:Value` as canonical syntax. The three isPS regexes (line 878 for `-Destination`, line 880 for `-LiteralPath`, line 882 for `-Path`/`-FilePath`) all anchor with `$`, so `-Destination:path` fails every match and falls through to the positional fallback.
+
+Fix: before regex testing, split `-Param:Value` tokens into paramName and inlineValue. Test regex against paramName; use inlineValue as dest if present, else `rest[j + 1]`.
+
+Replace the isPS loop body (lines 875–883) with:
+
+  for (let j = 0; j < rest.length; j++) {
+    const raw = rest[j];
+    // F-OP-69: PowerShell `-Param:Value` syntax — split so regex matches param name only
+    const colonIdx = raw.startsWith('-') ? raw.indexOf(':') : -1;
+    const f = colonIdx > 0 ? raw.slice(0, colonIdx) : raw;
+    const inlineVal = colonIdx > 0 ? raw.slice(colonIdx + 1) : undefined;
+    const nextVal = (): string | undefined => inlineVal !== undefined ? inlineVal : rest[j + 1];
+
+    // F-OP-64: accept every unambiguous PS param prefix (-De, -Des, -Dest, ..., -Destination)
+    if (isCopyMove && /^-d(?:e(?:s(?:t(?:i(?:n(?:a(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$/i.test(f)) { dest = nextVal(); break; }
+    // F-OP-62: -LiteralPath is the SOURCE for Copy-Item/Move-Item; only use it as dest for path-write cmdlets
+    if (isPathCmd && /^-literal(?:path)?$/i.test(f)) { dest = nextVal(); break; }
+    // F-OP-64: accept -Pa, -Pat, -Path and -FileP, ..., -FilePath prefixes
+    if (isPathCmd && /^-(?:p(?:a(?:t(?:h)?)?)?|f(?:i(?:l(?:e(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)$/i.test(f)) { dest = nextVal(); break; }
+  }
+
+Note: the loop bound changes from `rest.length - 1` to `rest.length` because inlineVal-bearing tokens do not require `rest[j + 1]` to exist. The `nextVal()` helper returns undefined for space-separated forms at the last index; the subsequent `isSensitive(undefined)` short-circuits correctly since `dest` remains undefined and the positional fallback runs.
+
+Phase 2 acceptance — all MUST block at L1:
+  • `Copy-Item -Destination:C:\Windows\System32\evil.dll src.txt`
+  • `Copy-Item -D:C:\Windows\System32\evil.dll src.txt`
+  • `Copy-Item -Dest:/Windows/System32/evil.dll src.txt`
+  • `Move-Item -Destination:/Windows/System32/evil.dll src.txt`
+  • `Out-File -LiteralPath:C:\Windows\System32\evil.dll -InputObject x`
+  • `Set-Content -Path:/Windows/System32/evil.dll -Value x`
+  • `New-Item -Path:C:\Windows\System32\evil.dll -ItemType File`
+  • `Add-Content -FilePath:C:\Windows\System32\drivers\etc\hosts -Value x`
+
+Phase 2 benign — MUST NOT block:
+  • `Copy-Item -Destination:C:\Users\user\file.txt src.txt`
+  • `Out-File -FilePath:C:\Users\user\out.txt -InputObject x`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 3 — VPS BLOCKED_PATTERNS backstop false-positive (F-OP-70 MEDIUM)
+File: vps-control-mcp/src/tools.ts, lines 713–716.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Root cause: The F-OP-65 backstop extension added `/home` to a source-side greedy regex, blocking benign `cp /home/user/data.csv /tmp/` flows. The backstop is redundant with D10 (which checks the destination argv) for the cases it correctly catches.
+
+Fix: remove `home` from the alternation in all three lines. /home writes remain covered by D10's argv-aware destination check (the same mechanism that caught the S61 /etc case). Keep /boot, /lib, /lib64, /opt — their read operations are uncommon in typical admin workflows and the dual coverage with D10 is cheap insurance.
+
+  Line 714 (cp), 715 (mv), 716 (install): change the alternation group from
+    (etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)
+  to
+    (etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)
+
+Phase 3 acceptance — all MUST block at L1 (D10 covers /home destination writes):
+  • `cp src /home/user/.ssh/authorized_keys`                    (D10 destination argv check)
+  • `cp src /boot/grub/grub.cfg`                                (backstop + D10)
+  • `cp -fvt /boot/grub/ evil`                                  (S62 F-OP-65 — MUST still block)
+  • `install -Dt /etc/ evil`                                    (S62 F-OP-65 — MUST still block)
+  • `mv release.tar /opt/app/current.tar`                       (backstop + D10)
+
+Phase 3 benign — MUST NOT block:
+  • `cp /home/user/data.csv /tmp/`
+  • `cp /home/user/*.log /tmp/logs/`
+  • `mv /home/deploy/release.tar /tmp/stage/`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 4 — Tests, version bumps, docs, commits
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tests — add to each repo's `bypass-corpus.test.ts`:
+  LT:  F-OP-68 suite (6 blocks including the re-asserted F-OP-52 case + 2 benign).
+       F-OP-69 suite (8 blocks + 2 benign).
+  VPS: F-OP-70 suite (3 new benign assertions — the newly-allowed /home reads — plus regression assertions that /home writes and all other extended-backstop paths still block via D10 or the remaining backstop alternation).
+
+Run the full `bypass-corpus.test.ts` on both repos. Verify specifically:
+  • LT F-OP-52 suite (lines 305–308 of current test file) passes.
+  • LT F-OP-63 suite (lines 356–365) still passes (forward-slash Windows path still blocks).
+  • LT F-OP-62/64 suites unaffected.
+  • VPS F-OP-65 suite unaffected (cluster + install backstop).
+  • VPS F-OP-66 suite unaffected.
+  • No other S61/S62 corpus regressions.
+
+Version bumps:
+  LT/package.json:  "version": "1.10.1" → "1.10.2"
+  VPS/package.json: "version": "1.10.1" → "1.10.2"
+
+Docs — append an `### S63 Fixes — v1.10.2` table to both ADVERSARIAL_REVIEW.md files (same shape as the `### S62 Fixes — v1.10.1` table). Columns: ID | Severity | Fix | Verification. Rows for F-OP-68, F-OP-69, F-OP-70. On the LT file mark F-OP-70 as `N/A — VPS only; see VPS review`. On the VPS file mark F-OP-68/69 as `N/A — LT only; see LT review`.
+
+Commits (one per repo):
+  LT:  "security: close S63 D10 NIX-path regression (F-OP-68) + PS colon-syntax (F-OP-69); bump 1.10.2"
+  VPS: "security: close S63 BLOCKED_PATTERNS FP on /home reads (F-OP-70); bump 1.10.2"
+
+Acceptance checklist (all must be true before shipping):
+  [ ] F-OP-68 / F-OP-69 / F-OP-70 test suites pass in both repos.
+  [ ] LT F-OP-52 suite passes after the F-OP-68 fix.
+  [ ] LT F-OP-63 suite still passes (forward-slash Windows path still blocks).
+  [ ] No S61/S62 corpus regressions on either repo.
+  [ ] No benign-form false positives recorded.
+  [ ] Both package.json bumped to 1.10.2.
+  [ ] Both ADVERSARIAL_REVIEW.md carry the S63 Fixes — v1.10.2 table.
+  [ ] Both repos have a commit matching the message template above.
+```
+
+---
+
+*End of S63 tenth-pass findings.*
+
+### S63 Fixes — v1.10.2
+
+All three findings addressed in commit `security: close S63 BLOCKED_PATTERNS FP on /home reads (F-OP-70); bump 1.10.2`. Patch version bump `1.10.1 → 1.10.2` reflects matcher-semantics tightening only — no config-surface break.
+
+| ID | Severity | Fix | Verification |
+|---|---|---|---|
+| F-OP-68 | N/A | LT only; see LT review. | — |
+| F-OP-69 | N/A | LT only; see LT review. | — |
+| F-OP-70 | MEDIUM | `home` removed from the alternation group in all three BLOCKED_PATTERNS lines (cp, mv, install). `/home` destination writes remain covered by D10's argv-aware destination check. `/boot`, `/lib`, `/lib64`, `/opt` retained in the backstop. Comment updated to clarify the /home rationale. | `bypass-corpus.test.ts` — `F-OP-70` suite (3 new benign /home-source assertions + regression assertions for /home-destination D10 block and remaining backstop paths) |

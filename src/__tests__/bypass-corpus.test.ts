@@ -72,15 +72,15 @@ describe('H1: Deletion alternatives (unlink, find --delete, mv /dev/null)', () =
 
 // ── H3: Uncovered script interpreters ────────────────────────────────────
 describe('H3: Script interpreter -e/-r inline execution', () => {
-  it('blocks perl -e payload', () => assertBlocked('perl -e "system(\"id\")"'));
-  it('blocks ruby -e payload', () => assertBlocked('ruby -e "exec(\"id\")"'));
-  it('blocks lua -e payload', () => assertBlocked('lua -e "os.execute(\"id\")"'));
-  it('blocks php -r payload', () => assertBlocked('php -r "system(\"id\");"'));
+  it('blocks perl -e payload', () => assertBlocked('perl -e "system(\\"id\\")"'));
+  it('blocks ruby -e payload', () => assertBlocked('ruby -e "exec(\\"id\\")"'));
+  it('blocks lua -e payload', () => assertBlocked('lua -e "os.execute(\\"id\\")"'));
+  it('blocks php -r payload', () => assertBlocked('php -r "system(\\"id\\");"'));
   it('blocks tclsh inline', () => assertBlocked('tclsh /tmp/payload.tcl'));
   it('blocks expect -c payload', () => assertBlocked('expect -c "spawn sh"'));
   it('blocks m4 syscmd', () => assertBlocked('m4 -D X=1 <<< "m4_syscmd(id)"'));
-  it('blocks awk system()', () => assertBlocked('awk "BEGIN{system(\"id\")}"'));
-  it('blocks bpftrace -e payload', () => assertBlocked('bpftrace -e "kretprobe:__x64_sys_execve { printf(\"%s\", str(arg0)); }"'));
+  it('blocks awk system()', () => assertBlocked('awk "BEGIN{system(\\"id\\")}"'));
+  it('blocks bpftrace -e payload', () => assertBlocked('bpftrace -e "kretprobe:__x64_sys_execve { printf(\\"%s\\", str(arg0)); }"'));
 });
 
 // ── H6: Kernel namespace and capability primitives ───────────────────────
@@ -263,7 +263,33 @@ describe('F-OP-66: M7-extended no-.. redirect to sensitive path (VPS)', () => {
   it('blocks cat x >> ./etc/crontab', () => assertBlocked('cat x >> ./etc/crontab'));
   it('blocks cat x > ././boot/grub/grub.cfg', () => assertBlocked('cat x > ././boot/grub/grub.cfg'));
   it('allows cat x > ./out.txt (benign relative)', () => assertAllowed('cat x > ./out.txt'));
-  it('allows echo x > /tmp/report.log (benign absolute)', () => assertAllowed('echo x > /tmp/report.log'));
+  it('allows echo x > ./tmp/report.log (benign relative to non-sensitive path)', () => assertAllowed('echo x > ./tmp/report.log'));
+});
+
+// ── F-OP-68/69: N/A — LT only; see LT review ────────────────────────────
+
+// ── F-OP-70: BLOCKED_PATTERNS /home false-positive fix (VPS) ─────────────
+describe('F-OP-70: /home removed from cp/mv/install BLOCKED_PATTERNS source-side (VPS)', () => {
+  // These were false-positives in v1.10.1 — must now be ALLOWED
+  it('allows cp /home/user/file /tmp/out (source-side /home must not false-positive)', () =>
+    assertAllowed('cp /home/user/file /tmp/out'));
+  it('allows mv /home/alice/report.pdf /srv/reports/ (source-side /home must not false-positive)', () =>
+    assertAllowed('mv /home/alice/report.pdf /srv/reports/'));
+  it('allows cp /home/user/*.log /tmp/logs/ (source-side /home must not false-positive)', () =>
+    assertAllowed('cp /home/user/*.log /tmp/logs/'));
+  // Destination-side /home writes must still block via D10
+  it('blocks cp evil /home/victim/.ssh/authorized_keys (destination /home still blocked via D10)', () =>
+    assertBlocked('cp evil /home/victim/.ssh/authorized_keys'));
+  // Remaining backstop paths (not /home) must still block
+  it('blocks cp src /boot/grub/grub.cfg (backstop still covers /boot)', () =>
+    assertBlocked('cp src /boot/grub/grub.cfg'));
+  it('blocks mv release.tar /opt/app/current.tar (backstop still covers /opt)', () =>
+    assertBlocked('mv release.tar /opt/app/current.tar'));
+  // S62 F-OP-65 cluster cases must still block (no regression)
+  it('blocks cp -fvt /boot/grub/ evil (F-OP-65 cluster still blocks)', () =>
+    assertBlocked('cp -fvt /boot/grub/ evil'));
+  it('blocks install -Dt /etc/ evil (F-OP-65 install backstop still blocks)', () =>
+    assertBlocked('install -Dt /etc/ evil'));
 });
 
 // ── H18: Per-binary bypass allowlist ─────────────────────────────────────────

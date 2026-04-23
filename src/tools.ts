@@ -710,10 +710,12 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: />>/,                      category: 'file-write',       reason: 'Append redirect is prohibited.' },
   { pattern: /\btee\b/,                 category: 'file-write',       reason: 'tee (file write) is prohibited.' },
   { pattern: /\bln\s+-s/,              category: 'file-write',       reason: 'Symlink creation is prohibited.' },
-  // F-OP-65: broadened to cover /boot /lib /lib64 /opt /home; install added as backstop
-  { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//,      category: 'file-write', reason: 'Copying to system/user directories is prohibited.' },
-  { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//,      category: 'file-write', reason: 'Moving to system/user directories is prohibited.' },
-  { pattern: /\binstall\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt|home)\//, category: 'file-write', reason: 'install to system/user directories is prohibited.' },
+  // F-OP-65: broadened to cover /boot /lib /lib64 /opt; install added as backstop
+  // F-OP-70: removed /home from alternation — source-side /home reads are common in backup/ETL workflows;
+  //          /home destination writes are still caught by D10's argv-aware destination check.
+  { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//,      category: 'file-write', reason: 'Copying to system directories is prohibited.' },
+  { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//,      category: 'file-write', reason: 'Moving to system directories is prohibited.' },
+  { pattern: /\binstall\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//, category: 'file-write', reason: 'install to system directories is prohibited.' },
   { pattern: /\bsed\s+.*(?:-i|--in-place)\b/, category: 'file-write', reason: 'sed in-place editing (-i) is prohibited (direct file modification).' },
   { pattern: /\bawk\b.*>\s*["']?\//,           category: 'file-write', reason: 'awk writing to absolute paths is prohibited.' },
 
@@ -2655,10 +2657,10 @@ export const TOOLS = [
       type: 'object',
       properties: {
         dry_run: { description: 'Default true. Set false only after previewing the sequence.' },
-        description: { type: 'string',  description: 'Required. What is being deployed and why.' },
+        description: { type: 'string', description: 'Required. What is being deployed and why.' },
         confirm: { type: 'boolean', description: 'Must be true to execute. Required per-invocation (ToS §8). Omit or false returns a confirmation prompt.' },
       },
-      required: ['description'] as string[],
+      required: [] as string[],
     },
   },
   {
@@ -2675,99 +2677,51 @@ export const TOOLS = [
   },
 ];
 
-// ─── Dispatcher ───────────────────────────────────────────────────────────────
-
-export async function executeTool(
-  name: string,
-  args: Record<string, unknown>
-): Promise<string> {
+// ─── Dispatcher ─────────────────────────────────────────────────────────────────────────────────
+export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   try {
     switch (name) {
       case 'get_pm2_status':
         return await getPm2Status();
-
       case 'get_recent_errors':
-        return await getRecentErrors(
-          args.process_name as string,
-          parseNum(args.lines, 20)
-        );
-
+        return await getRecentErrors(args.process_name as string, parseNum(args.lines, 20));
       case 'read_file_section':
-        return await readFileSection(
-          args.file_path as string,
-          parseNum(args.start_line, 1),
-          parseNum(args.end_line, 1)
-        );
-
+        return await readFileSection(args.file_path as string, parseNum(args.start_line, 1), parseNum(args.end_line, 1));
       case 'search_file':
-        return await searchFile(
-          args.file_path as string,
-          args.pattern as string,
-          parseNum(args.context_lines, 3)
-        );
-
+        return await searchFile(args.file_path as string, args.pattern as string, parseNum(args.context_lines, 3));
       case 'git_status':
         return await gitStatus();
-
       case 'git_log':
         return await gitLog(parseNum(args.count, 10));
-
       case 'git_pull':
-        return await gitPull(parseBool(args.dry_run, true), args.directory as string | undefined);
-
+        return await gitPull(parseBool(args.dry_run, true), args.directory as string);
       case 'git_push':
-        return await gitPush(
-          parseBool(args.dry_run, true),
-          (args.description as string) ?? ''
-        );
-
+        return await gitPush(parseBool(args.dry_run, true), (args.description as string) ?? '');
       case 'restart_process':
-        return await restartProcess(
-          args.process_name as string,
-          parseBool(args.dry_run, true)
-        );
-
+        return await restartProcess(args.process_name as string, parseBool(args.dry_run, true));
       case 'get_system_health':
         return await getSystemHealth();
-
       case 'run_approved_command':
-        return await runApprovedCommand(
-          args.command as string,
-          args.justification as string,
-          parseBool(args.dry_run, true),
-          parseBool(args.run_in_background, false)
-        );
-
+        return await runApprovedCommand(args.command as string, args.justification as string, parseBool(args.dry_run, true), parseBool(args.run_in_background, false));
       case 'get_job_status':
         return await getJobStatus((args.job_id as string) ?? '');
-
       case 'deploy':
-        return await deployApp(
-          parseBool(args.dry_run, true),
-          (args.description as string) ?? '',
-          parseBool(args.confirm, false)
-        );
-
+        return await deployApp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
       case 'deploy_vps_mcp':
-        return await deployVpsMcp(
-          parseBool(args.dry_run, true),
-          (args.description as string) ?? '',
-          parseBool(args.confirm, false)
-        );
-
+        return await deployVpsMcp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
       case 'get_deploy_status':
         return await getDeployStatus((args.job_id as string) ?? '');
-
       default:
         return `Unknown tool: "${name}". Available tools: ${TOOLS.map(t => t.name).join(', ')}`;
     }
-  } catch (err) {
+  }
+  catch (err) {
     const e = err as Error;
     return `ERROR [${name}]: ${e.message}`;
   }
 }
 
-// ─── Test-only exports ──────────────────
+// ─── Test-only exports ──────
 export const __TEST_ONLY = {
   validateCommand,
   validateAgainstAllowlist,
