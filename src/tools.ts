@@ -546,7 +546,11 @@ function validatePath(filePath: string): string {
 
   const allowed = ALLOWED_READ_DIRS.some(dir => {
     const d = path.resolve(dir);
-    return real === d || real.startsWith(d + '/');
+    // Use path.sep (not hardcoded '/') so the prefix check works on Windows dev
+    // environments where path.resolve returns `C:\tmp\testapp` — otherwise the
+    // test harness under Windows rejects all otherwise-allowed reads. POSIX targets
+    // are unaffected (path.sep === '/' on POSIX). Not a security regression.
+    return real === d || real.startsWith(d + path.sep);
   });
   if (!allowed) {
     throw new Error(
@@ -711,8 +715,12 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\btee\b/,                 category: 'file-write',       reason: 'tee (file write) is prohibited.' },
   { pattern: /\bln\s+-s/,              category: 'file-write',       reason: 'Symlink creation is prohibited.' },
   // F-OP-65: broadened to cover /boot /lib /lib64 /opt; install added as backstop
-  // F-OP-70: removed /home from alternation — source-side /home reads are common in backup/ETL workflows;
-  //          /home destination writes are still caught by D10's argv-aware destination check.
+  // F-OP-70 (v1.10.2): removed /home from this anywhere-matching backstop to eliminate
+  //          source-side false-positive blocks (e.g. `cp /home/user/file /tmp/out`).
+  // F-OP-71 (v1.10.3): /home destination writes are caught by D10's argv-aware matcher
+  //          (L1125 SENSITIVE regex), restoring the destination-side protection the
+  //          v1.10.2 backstop edit inadvertently dropped. Covers persistence via
+  //          ~/.ssh/authorized_keys, ~/.bashrc, ~/.config/systemd/user/*.service, etc.
   { pattern: /\bcp\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//,      category: 'file-write', reason: 'Copying to system directories is prohibited.' },
   { pattern: /\bmv\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//,      category: 'file-write', reason: 'Moving to system directories is prohibited.' },
   { pattern: /\binstall\b.*\/(etc|root|bin|sbin|usr|var|boot|lib|lib64|opt)\//, category: 'file-write', reason: 'install to system directories is prohibited.' },
@@ -1122,7 +1130,11 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   // tee writing to sensitive files, and dd of=<sensitive> writes.
   { matcher: (_cmd: string, argv: string[]) => {
       const DEST_CMDS = new Set(['cp', 'mv', 'install']);
-      const SENSITIVE = /^\/(etc|root|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
+      // F-OP-71 (v1.10.3): /home added — destination writes to user homes enable SSH key,
+      // shell-rc, and systemd-user persistence. F-OP-70 (v1.10.2) removed /home from the
+      // anywhere-matching backstop at L716 to fix source-side false-positives, but D10's
+      // SENSITIVE list hadn't included /home, silently dropping destination-side protection.
+      const SENSITIVE = /^\/(etc|root|home|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
       // F-OP-53: env-var / tilde expansion is not statically analyzable — fail closed
       const isExpandable = (p: string): boolean => p.startsWith('~') || p.includes('$');
       // F-OP-52: canonicalize ../ and ./ segments before prefix test
@@ -1189,7 +1201,9 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
         else if (s !== '.') out.push(s);
       }
       const normalized = '/' + out.join('/') + '/';
-      const SENSITIVE = /^\/(etc|root|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
+      // F-OP-71 (v1.10.3): /home kept in sync with D10 (L1125) so `> /home/.../authorized_keys`
+      // cannot be a parallel bypass path to `cp ... /home/.../authorized_keys`.
+      const SENSITIVE = /^\/(etc|root|home|usr\/bin|usr\/sbin|bin|sbin|lib|lib64|boot)\//;
       return SENSITIVE.test(normalized);
     }, category: 'sensitive-path-write' },
   { pattern: />>?\s*\/(etc|root|boot|usr\/bin|usr\/sbin|bin\/|sbin\/)/i, category: 'sensitive-path-write' },

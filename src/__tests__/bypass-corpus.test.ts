@@ -277,9 +277,17 @@ describe('F-OP-70: /home removed from cp/mv/install BLOCKED_PATTERNS source-side
     assertAllowed('mv /home/alice/report.pdf /srv/reports/'));
   it('allows cp /home/user/*.log /tmp/logs/ (source-side /home must not false-positive)', () =>
     assertAllowed('cp /home/user/*.log /tmp/logs/'));
-  // Destination-side /home writes must still block via D10
+  // Destination-side /home writes must still block via D10 (F-OP-71, v1.10.3)
   it('blocks cp evil /home/victim/.ssh/authorized_keys (destination /home still blocked via D10)', () =>
     assertBlocked('cp evil /home/victim/.ssh/authorized_keys'));
+  it('blocks mv payload /home/alice/.bashrc (shell-rc persistence)', () =>
+    assertBlocked('mv payload /home/alice/.bashrc'));
+  it('blocks cp svc /home/bob/.config/systemd/user/evil.service (systemd-user persistence)', () =>
+    assertBlocked('cp svc /home/bob/.config/systemd/user/evil.service'));
+  it('blocks install evilbin /home/carol/.local/bin/malware (user-local bin persistence)', () =>
+    assertBlocked('install evilbin /home/carol/.local/bin/malware'));
+  it('blocks echo x > /home/dave/.ssh/authorized_keys (redirect parallel path, M7-extended)', () =>
+    assertBlocked('echo pubkey > /home/dave/.ssh/authorized_keys'));
   // Remaining backstop paths (not /home) must still block
   it('blocks cp src /boot/grub/grub.cfg (backstop still covers /boot)', () =>
     assertBlocked('cp src /boot/grub/grub.cfg'));

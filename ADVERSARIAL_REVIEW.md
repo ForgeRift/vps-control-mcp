@@ -506,3 +506,46 @@ All three findings addressed in commit `security: close S63 BLOCKED_PATTERNS FP 
 | F-OP-68 | N/A | LT only; see LT review. | — |
 | F-OP-69 | N/A | LT only; see LT review. | — |
 | F-OP-70 | MEDIUM | `home` removed from the alternation group in all three BLOCKED_PATTERNS lines (cp, mv, install). `/home` destination writes remain covered by D10's argv-aware destination check. `/boot`, `/lib`, `/lib64`, `/opt` retained in the backstop. Comment updated to clarify the /home rationale. | `bypass-corpus.test.ts` — `F-OP-70` suite (3 new benign /home-source assertions + regression assertions for /home-destination D10 block and remaining backstop paths) |
+
+
+---
+
+## Eleventh Pass â€” S64 â€” 2026-04-23
+
+Eleventh-pass audit run on Claude Opus against the v1.10.2 S63-fix surfaces. Scope was limited to the three surgical v1.10.2 patches (F-OP-68/69/70); prior closures (F-OP-1..F-OP-67, C1..C24) were not re-audited. Nine findings opened (F-OP-71..F-OP-79); seven closed in v1.10.3, one retracted, one applies to LT only.
+
+### Findings table
+
+| ID | Severity | Persona | Repo | Summary |
+| --- | --- | --- | --- | --- |
+| F-OP-71 | CRITICAL | Red Team | VPS | F-OP-70 backstop edit silently dropped `/home` destination-side write protection; D10 `SENSITIVE` regex at L1125 never had `/home`, so `cp evil /home/victim/.ssh/authorized_keys` and analogous `.bashrc` / `~/.config/systemd/user/` persistence writes passed `validateCommand`. The v1.10.2 comment at L714-715 claiming "D10's argv-aware destination check" covered this was false. The existing bypass-corpus test at L281 was expected-to-block but could not pass against the shipped code. |
+| F-OP-72 | HIGH | Red Team | LT only |
+| F-OP-73 | HIGH | â€” | â€” | **Retracted** â€” opened against a sandbox-truncated 275-line view of LT `bypass-corpus.test.ts`; the actual 411-line file has dedicated describe blocks for F-OP-49/51/52/54/55/56/62/63/64/66/68/69. Corpus discipline is healthy. |
+| F-OP-74 | MEDIUM | Red Team | LT only |
+| F-OP-75 | MEDIUM | Supply Chain + Consumer Safety | LT only |
+| F-OP-76 | MEDIUM | Consumer Safety | VPS + LT | SECURITY.md pre-dated v1.10.2 and contained no mention of D10 destination coverage, F-OP-68/69/70, or v1.10 release notes â€” operators had no signal that v1.10.0â€“v1.10.1 carried a PS colon-syntax bypass or what D10 actually protects. |
+| F-OP-77 | MEDIUM | Supply Chain | VPS | The shipped F-OP-70 fix (regex alternation delete) diverged from the design described in the review prompt (tokenize-and-inspect last non-flag token). The approaches had different security properties and the L715 comment misrepresented shipped behavior. |
+| F-OP-78 | LOW | Red Team | LT only |
+| F-OP-79 | LOW | Red Team | LT only |
+
+### S64 Fixes â€” v1.10.3 (VPS)
+
+All three VPS findings addressed in one commit covering F-OP-71 + F-OP-76 + F-OP-77. Patch bump `1.10.2 â†’ 1.10.3` reflects matcher-semantics restoration and documentation alignment â€” no config-surface break.
+
+| ID | Fix | Verification |
+| --- | --- | --- |
+| F-OP-71 | `/home` added to D10 `SENSITIVE` regex (src/tools.ts:1130) and to M7-extended redirect `SENSITIVE` (src/tools.ts:1202); inline comments document the v1.10.2 â†’ v1.10.3 narrative honestly. | `bypass-corpus.test.ts` â€” F-OP-70 suite expanded with 4 new assertBlocked cases: `cp evil /home/victim/.ssh/authorized_keys` (the original test at L281 now passes), `mv payload /home/alice/.bashrc`, `cp svc /home/bob/.config/systemd/user/evil.service`, `install evilbin /home/carol/.local/bin/malware`, `echo pubkey > /home/dave/.ssh/authorized_keys`. All 3 pre-existing F-OP-70 source-side allow cases still pass. |
+| F-OP-76 | `SECURITY.md` gains a "Destination-Path Write Protection (D10)" subsection listing the full sensitive-prefix set, and a "Security Release Notes â€” v1.10.x" table explicitly describing v1.10.0/v1.10.1/v1.10.2/v1.10.3 coverage changes, including the F-OP-71 regression window. | Grep `SECURITY.md` for `D10`, `F-OP-71`, `v1.10` â€” all present. |
+| F-OP-77 | F-OP-70 comment at `src/tools.ts:714-719` rewritten to accurately describe the source-side false-positive fix and the F-OP-71 destination-side restoration. Historical S63 Fixes table entry (above) is not edited â€” preserved as the v1.10.2 state-of-the-repo snapshot; this S64 section is the correction. | Code comment now matches implementation. |
+
+### Test outcome
+- VPS `bypass-corpus.test.ts`: **28/28 pass** (including the 5 new /home destination assertBlocked + the 3 pre-existing F-OP-70 source-side assertAllowed).
+- VPS full test suite: 465/476 pass. The 11 failures are pre-existing Windows-portability issues in the test harness (hardcoded `/tmp/testapp` paths resolve to `C:\tmp\testapp` on Windows and the test `.js` fixtures are absent at that path). They are NOT caused by the v1.10.3 changes and pre-date this pass. Tracked as a separate cleanup; not release-blocking.
+
+### Honest note on audit method
+
+S64 was produced against a sandbox mount that silently truncated several files (VPS `tools.ts` at 105KB out of real 154KB; `ADVERSARIAL_REVIEW.md` at 33KB out of real 62KB; etc.). Before writing any fixes, all nine findings were re-verified against the full Windows-side files via PowerShell shell access. F-OP-73 was retracted during that re-verification when the full LT corpus revealed coverage the truncated view had hidden. The remaining eight findings survived re-verification and were closed in v1.10.3.
+
+---
+
+*End of S64 eleventh-pass findings.*

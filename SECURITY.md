@@ -150,6 +150,25 @@ The following files and directories are never readable, regardless of the comman
 
 The file protection mechanism operates at the OS level using read-time filtering on command output. If a command would output a sensitive file, that output is redacted and logged as a security event.
 
+### Destination-Path Write Protection (D10)
+
+Command-surface destination-path protection (D10) blocks `cp`, `mv`, `install`, `tee`, and `dd of=...` when the destination path resolves — after `../` canonicalization — to any of:
+
+`/etc/`, `/root/`, `/home/`, `/usr/bin/`, `/usr/sbin/`, `/bin/`, `/sbin/`, `/lib/`, `/lib64/`, `/boot/`
+
+The same sensitive-prefix list applies to shell-redirect destinations (`>`, `>>`) via M7-extended. GNU `--target-directory` / `-t` (short form and glued short-option clusters like `-fvt`) are handled by D10's argv-aware matcher. Env-var and tilde expansion (`$HOME`, `~`, `%SystemRoot%`) in destination paths fail closed.
+
+### Security Release Notes — v1.10.x
+
+| Version | Closed | Scope |
+|---|---|---|
+| v1.10.0 | F-OP-62 / F-OP-63 / F-OP-64 | PowerShell `Copy-Item` / `Move-Item` destination detection, `-LiteralPath` gating, parameter-prefix abbreviations (`-De`, `-Des`, …) |
+| v1.10.1 | F-OP-66 | M7-extended redirect no-`..` form (`> ./etc/passwd`) |
+| v1.10.2 | F-OP-68 / F-OP-69 / F-OP-70 | LT normalizePath separator consistency; LT PS colon-syntax (`-Destination:<path>`) token-split; VPS `/home` source-side false-positive elimination |
+| v1.10.3 | F-OP-71 / F-OP-74 / F-OP-75 | **VPS `/home` destination-side protection restored** — v1.10.2 removed `/home` from the cp/mv backstop to fix source-side false-positives, but D10's SENSITIVE regex did not then include `/home`, silently dropping destination-side coverage for `~/.ssh/authorized_keys`, `~/.bashrc`, `~/.config/systemd/user/*.service`, etc. Also: LT `SENSITIVE_WIN` unified across D10 and M7-extended (F-OP-74); LT `tools_BRANCH.ts` / `tools_HEAD.ts` merge-conflict artifacts removed (F-OP-75). |
+
+**Known pre-v1.10.3 bypass scope:** operators running v1.10.0–v1.10.2 of VPS could not rely on destination-side `/home` write protection via the synchronous layer; the tier-3 AI review would still flag `authorized_keys` as high-risk but AI layers fail open when `ANTHROPIC_API_KEY` is unset. Upgrading to v1.10.3 closes this gap.
+
 ## Session-Level Security Controls
 
 ### Rate Limiting
