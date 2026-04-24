@@ -6,6 +6,28 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.10.4] - 2026-04-23
+
+### Security - F-OP-81 / F-OP-83 / F-OP-84 / F-OP-85 (S65 closure)
+
+#### History rewrite (F-OP-81)
+- **F-OP-81** - Three files purged from all reachable git history via `git filter-branch --index-filter 'git rm --cached --ignore-unmatch ...' --prune-empty --tag-name-filter cat -- --all`: `.env.test`, `.env.test.fixture.bak`, `scripts/prepare-test-env.mjs.bak`. The `.env.test` blob had leaked Cowork session identifiers and user-handle paths across multiple commits. Stale `origin/dependabot/...` branch (which still pointed at a pre-rewrite commit containing `.env.test`) deleted, `refs/original/*` backup refs cleaned, `git gc --prune=now --aggressive` run, force-push to `origin main` and `origin --tags`. GitHub visibility toggled PUBLIC -> PRIVATE -> PUBLIC to trigger server-side GC of unreachable blobs.
+
+> **Breaking change for existing clones.** All commit SHAs were rewritten. Collaborators and deploy targets must `git fetch origin && git reset --hard origin/main`. No forward-going code or API surface change; this is a history-cleaning release.
+
+#### Documentation
+- **F-OP-83** - SECURITY.md D10 subsection now points at `BYPASS_BINARIES` as the documented operator override for legitimate `/home` persistence-adjacent workflows (backup-restore, `~/.config` updates, CI runner provisioning under `/home/runner/...`). Example override string included.
+
+#### Supply-chain hygiene
+- **F-OP-84** - `.githooks/pre-commit` enforces refusal of merge-conflict artifacts (`_BRANCH`/`_HEAD`/`_LOCAL`/`_REMOTE`/`_BASE`/`_MERGED`/`_YOURS`/`_THEIRS.ts`) plus backup/editor files (`.orig`, `.orig.N`, `.rej`, `.bak`, `.swp`, `*~`, `.env.test`). `package.json` `prepare` script wires `core.hooksPath` to `.githooks` automatically on `npm install`.
+- **F-OP-85** (parity) - `.gitignore` expanded from 5 lines (`node_modules/`, `dist/`, `.env`, `*.log`, `deploy-jobs.json`) to cover the full merge-artifact class plus `.env.test*` and `*.bak`. Brings VPS up to parity with LT.
+
+#### Testing
+- No source code touched (all fixes are docs / hygiene / history purge). Full VPS suite still passes **476/476**. DO-side deploy verified: `/root/vps-control-mcp` force-synced, `npm install`, `npm run build`, `pm2 restart vps-mcp` - restart counter incremented, process returned to `online`.
+
+---
+
+
 ## [1.9.7] — 2026-04-22
 
 ### Security — H18: Per-binary bypass allowlist

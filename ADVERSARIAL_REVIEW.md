@@ -549,3 +549,50 @@ S64 was produced against a sandbox mount that silently truncated several files (
 ---
 
 *End of S64 eleventh-pass findings.*
+
+
+## Twelfth Pass - S65 - 2026-04-23
+
+Twelfth-pass audit run against the v1.10.3 S64-fix surfaces. Scope: the v1.10.3 delta (VPS e3563876, LT a1340adc) only; F-OP-1..F-OP-79 and C1..C24 out of scope unless regression evidence surfaced in the touched function bodies. Six findings opened (F-OP-80..F-OP-85); all six closed in v1.10.4.
+
+### Findings table
+
+| ID | Severity | Persona | Repo | Summary |
+| --- | --- | --- | --- | --- |
+| F-OP-80 | MEDIUM | Consumer Safety | LT only | See LT ADVERSARIAL_REVIEW.md. |
+| F-OP-81 | MEDIUM | Supply Chain | VPS | `.env.test`, `.env.test.fixture.bak`, and `scripts/prepare-test-env.mjs.bak` tracked in `e3563876` (v1.10.3). The `.env.test` blob leaked Cowork session identifiers and user-handle paths across multiple commits (verified with `git show <commit>:.env.test` across the history: `confident-cool-goodall`, `jolly-youthful-franklin`, etc.). Stale APP_DIR predated v1.10.3's `/tmp/testapp_user -> /tmp/testapp` realignment. `.bak` files preserved the pre-v1.10.3 cross-platform-less version of the test-env script that any downstream glob like `scripts/*` would have shipped. |
+| F-OP-82 | LOW | Red Team | LT only | See LT ADVERSARIAL_REVIEW.md. |
+| F-OP-83 | LOW | Consumer Safety | both | D10 `SECURITY.md` section at L152 did not point operators at `BYPASS_BINARIES` as the documented override for legitimate `/home` persistence-adjacent workflows (backup-restore, `~/.config` updates, CI runner provisioning). The block-by-default surface was undiscoverable without separately reading the H18 section at L345. |
+| F-OP-84 | LOW | Supply Chain | both | Merge-artifact and backup-file guards were `.gitignore`-only with no pre-commit or CI enforcement. `git add -f` or non-standard filename shapes (`_LOCAL`, `_MERGED`, `.bak`, `.rej`, `~`, `.swp`, `.env.test`) could re-introduce the same class of regressions through the normal commit flow. |
+| F-OP-85 | LOW | Supply Chain | LT + VPS parity | F-OP-75 `.gitignore` was narrow-shape-only on LT and entirely missing the class on VPS (pre-v1.10.4 VPS `.gitignore` had `.env` / `*.log` / `deploy-jobs.json` only). Parity restored in v1.10.4. |
+
+### S65 Fixes - v1.10.4 (VPS)
+
+VPS-applicable findings closed across two commits: docs/hygiene (`cbbcf8e` -> rewritten `d6aa396`) and a `git filter-branch` history rewrite that purged the three F-OP-81 blobs from all reachable refs. Patch bump `1.10.3 -> 1.10.4`.
+
+| ID | Fix | Verification |
+| --- | --- | --- |
+| F-OP-81 | (a) `.gitignore` extended with `.env.test`, `.env.test.local`, `*.bak`, `*~` so future re-introduction via `git add` is declined. (b) `git filter-branch --index-filter 'git rm --cached --ignore-unmatch .env.test .env.test.fixture.bak scripts/prepare-test-env.mjs.bak' --prune-empty --tag-name-filter cat -- --all` rewrote all 69 reachable commits to remove the three files. (c) `refs/original/*` backup refs deleted. (d) Stale `origin/dependabot/npm_and_yarn/npm_and_yarn-da47bb892b` remote branch deleted (still held `ab23edd`, the commit that originally introduced the leaked `.env.test` blob). (e) `git reflog expire --expire=now --all; git gc --prune=now --aggressive`. (f) Force-pushed `origin main` and `origin --tags`. (g) Repo visibility toggled PUBLIC -> PRIVATE -> PUBLIC on GitHub to trigger server-side GC of the unreachable blobs. | `git log --all -p -- .env.test` returns 0 bytes; same for `.env.test.fixture.bak` and `scripts/prepare-test-env.mjs.bak`. `git rev-list --all \| grep ab23edd` returns empty (original leak commit no longer reachable from any ref). `git ls-files \| grep '(\.env\.test\$\|\.bak\$)'` returns empty in HEAD. |
+| F-OP-83 | `SECURITY.md` D10 subsection gained an "Operator override" paragraph pointing at `BYPASS_BINARIES` (H18) with a concrete example string (`BYPASS_BINARIES=cp:sensitive-path-write,mv:sensitive-path-write,install:sensitive-path-write`) and a note that redirect (`> /home/...`) and `dd of=...` remain blocked even with `cp`/`mv`/`install` demoted. | Grep `SECURITY.md` for `BYPASS_BINARIES=cp:sensitive-path-write` returns the new paragraph at L161. |
+| F-OP-84 | `.githooks/pre-commit` added (checked-in shell script refusing commits matching `(_BRANCH\|_HEAD\|_LOCAL\|_REMOTE\|_BASE\|_MERGED\|_YOURS\|_THEIRS)\.ts$`, `.orig`, `.orig.N`, `.rej`, `.bak`, `.swp`, `~`, `.env.test`). `package.json` `prepare` script wires `core.hooksPath` to `.githooks` so the guard activates on every `npm install`. | Smoke test: staged `test_MERGED.ts` then `git commit` was refused with `[pre-commit] Refusing to commit merge-conflict / backup / test-env artifacts: test_MERGED.ts`. Confirmed the hook message matches the SECURITY.md v1.10.4 disclosure. |
+| F-OP-85 | `.gitignore` expanded from 5 lines (`node_modules/`, `dist/`, `.env`, `*.log`, `deploy-jobs.json`) to a full pattern class (`.env.test*`, `*.bak`, `*~`, and the 8 merge-tool shape patterns). Parity with LT's new `.gitignore`. | Pattern grep returns all 10+ new patterns. |
+
+### Test outcome
+- VPS `security.test.ts` + corpus tests: **476/476 pass before v1.10.4, 476/476 pass after.** Zero test additions on VPS (all fixes were docs / hygiene / history purge - no source code touched). Zero regressions.
+- `core.hooksPath` wired automatically on `npm install` via the `prepare` script - verified.
+- DO-side deploy: `/root/vps-control-mcp` force-synced via `git fetch && git reset --hard origin/main && npm install && npm run build && pm2 restart vps-mcp`. Post-restart `pm2 status` showed `vps-mcp` online with restart counter incremented.
+
+### F-OP-80 / F-OP-82 status
+LT-only findings. See LT ADVERSARIAL_REVIEW.md for disposition. Closed in v1.10.4 LT commit `43eb6e1`.
+
+### Honest note on audit method
+
+S65 was produced against the same Cowork sandbox mount that had previously silently truncated files in S64. This time, before opening findings, the full content for each reviewed file was pulled via `git show <commit>:<path>` directly from `.git/objects`, bypassing the mount layer entirely. Verified byte counts confirmed no truncation: the git-blob LF-normalized byte counts were approximately 1-2% below the handoff's Windows-side CRLF-counted figures, a delta entirely attributable to line endings. No findings were retracted.
+
+Additionally, the VPS `.git/index` appeared corrupt when accessed from the Linux sandbox (`index uses ?? extension, which we do not understand`) but worked cleanly from Windows-side git - this is a benign mount-layer observation, not a repo issue.
+
+During implementation, the Cowork mount's `Edit` tool was confirmed to silently truncate files to their pre-edit byte count on growing writes. All edits were applied in an isolated `/tmp` working area and bulk-copied to the mount via `cp` / `dd`, which preserved full file content (256KB round-trip SHA-matched write verified before touching real files).
+
+---
+
+*End of S65 twelfth-pass findings.*
