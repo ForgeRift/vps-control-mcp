@@ -635,22 +635,65 @@ app.all('/mcp', requireAuth, async (req, res) => {
   }
 
   // Stale/unknown session ID handling:
-  // - If this is an initialize request (client reconnecting after server restart):
-  //   strip the stale ID and fall through to fresh session creation. The client
-  //   receives a new session ID in the response header and continues seamlessly.
-  //   This eliminates manual plugin reconnect for end users after deploys/restarts.
-  // - If this is a non-initialize request with a stale ID: return 404 per MCP spec.
-  //   Do NOT create a new Server+Transport — abandoned pairs leak memory.
+  // - GET (SSE reconnect after server restart): transparently restore — create a fresh
+  //   server+transport registered under the original session ID so the client resumes
+  //   without noticing the restart. This is the primary auto-reconnect path.
+  // - POST initialize: strip the stale ID and fall through to fresh session creation.
+  // - POST non-initialize with stale ID: return 404 — the client must re-initialize.
+  //   Do NOT create a new Server+Transport for non-initialize POSTs — abandoned pairs leak.
   if (sessionId) {
     const body = req.body as Record<string, unknown>;
     const isInitialize = typeof body?.method === 'string' && body.method === 'initialize';
 
-    if (isInitialize) {
-      // Strip stale session ID so the SDK treats this as a fresh connection
+    if (req.method === 'GET') {
+      // SSE reconnect with stale session (server restarted). Restore transparently:
+      // create a fresh server+transport and register it under the old session ID.
+      // Cowork sees the SSE stream reopen and continues without manual intervention.
+      console.log(`[vps-control-mcp] Stale session ${sessionId} on SSE reconnect — restoring transparently`);
+      if (sessions.size >= MAX_SESSIONS) {
+        res.status(503).setHeader('Retry-After', '30').json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: `Server at session capacity (${MAX_SESSIONS}). Retry in 30s.` },
+          id: null,
+        });
+        return;
+      }
+      const capturedId = sessionId;
+      // Remove stale ID from headers so the transport treats this as a new session.
+      // The sessionIdGenerator below returns the original ID so routing stays intact.
       delete req.headers['mcp-session-id'];
-      console.log(`[vps-control-mcp] Stale session ${sessionId} — re-initializing transparently`);
+      const restoredTransport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => capturedId,
+        eventStore,
+        onsessioninitialized: (id) => {
+          console.log(`[vps-control-mcp] Session restored via SSE: ${id}`);
+          sessions.set(id, { server: restoredServer, transport: restoredTransport });
+        },
+        onsessionclosed: (id) => {
+          console.log(`[vps-control-mcp] Restored session closed: ${id}`);
+          sessions.delete(id);
+        },
+      });
+      restoredTransport.onclose = () => {
+        if (restoredTransport.sessionId) sessions.delete(restoredTransport.sessionId);
+      };
+      const restoredServer = createMcpServer();
+      await restoredServer.connect(restoredTransport);
+      // Pre-register under the old ID immediately so subsequent POSTs route here
+      // before onsessioninitialized fires (which only fires on a POST initialize).
+      sessions.set(capturedId, { server: restoredServer, transport: restoredTransport });
+      await restoredTransport.handleRequest(req, res, req.body);
+      return;
+
+    } else if (isInitialize) {
+      // POST initialize with stale session: strip the ID, fall through to fresh creation.
+      // The client receives a new session ID in the response header and continues.
+      delete req.headers['mcp-session-id'];
+      console.log(`[vps-control-mcp] Stale session ${sessionId} on initialize — re-creating transparently`);
       // Fall through to fresh session creation below
+
     } else {
+      // Non-initialize POST with stale session: return 404 per MCP spec.
       res.status(404).json({
         jsonrpc: '2.0',
         error: { code: -32000, message: 'Session not found. Client should re-initialize.' },
@@ -785,9 +828,25 @@ app.get('/health', async (req, res) => {
   });
 });
 
+// --- Graceful shutdown -------------------------------------------------------
+// On SIGTERM (PM2 restart/stop), log how many sessions were active.
+// PM2's kill_timeout in ecosystem.config.cjs is set to 8000ms, giving this
+// handler time to finish before SIGKILL. Clients that reconnect during the
+// gap will hit the stale-session SSE restore path above.
+
+process.on('SIGTERM', () => {
+  console.log(`[vps-control-mcp] SIGTERM received — ${sessions.size} active session(s). Shutting down.`);
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log(`[vps-control-mcp] SIGINT received — shutting down.`);
+  process.exit(0);
+});
+
 // --- Start -------------------------------------------------------------------
 
-app.listen(CONFIG.PORT, () => {
+const server = app.listen(CONFIG.PORT, () => {
   console.log('[vps-control-mcp] Running on port ' + CONFIG.PORT);
   console.log('[vps-control-mcp] Transport: Streamable HTTP (/mcp)');
   console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
