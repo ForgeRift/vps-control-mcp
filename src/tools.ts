@@ -2678,6 +2678,18 @@ export const TOOLS = [
     },
   },
   {
+    name: 'read_audit_log',
+    annotations: { title: 'Read Audit Log', readOnlyHint: true, destructiveHint: false },
+    description: 'Return the last N lines of the MCP audit log (default 20, max 100). Each line is a JSON object with ts, tool, args, output_chars, and dry_run fields. USE THIS — never ask the user to cat or tail the audit log manually; call this tool directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lines: { type: 'number', description: 'Number of tail lines to return. Default 20, max 100.' },
+      },
+      required: [] as string[],
+    },
+  },
+  {
     name: 'get_deploy_status',
     annotations: { title: 'Get Deploy Status', readOnlyHint: true, destructiveHint: false },
     description: 'Check the status and log of a background deploy job started by deploy or deploy_vps_mcp. Pass job_id from the deploy response. Omit job_id to list all jobs this session. USE THIS — never ask the user to tail deploy logs in their terminal while a job is running; poll here.',
@@ -2690,6 +2702,34 @@ export const TOOLS = [
     },
   },
 ];
+
+// ─── Audit log reader ────────────────────────────────────────────────────────────────────────────
+// read_audit_log intentionally bypasses validatePath / SENSITIVE_FILE_PATTERNS.
+// The audit log is safe to expose: all secret-shaped values are redacted before
+// writing (see audit.ts sanitizeArgs). The dedicated tool prevents the general
+// sensitive-file block from hiding the operator's own activity log.
+async function readAuditLog(lines: number): Promise<string> {
+  const clampedLines = Math.min(Math.max(lines, 1), CONFIG.MAX_FILE_LINES);
+  const logPath = CONFIG.AUDIT_LOG_PATH;
+
+  if (!fs.existsSync(logPath)) {
+    return `Audit log not found at ${logPath}. No tool calls have been logged yet, or AUDIT_LOG_PATH is misconfigured.`;
+  }
+
+  const collected: string[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(logPath, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    rl.on('line', (line) => { collected.push(line); });
+    rl.on('close', resolve);
+    stream.on('error', reject);
+  });
+
+  const tail = collected.slice(-clampedLines);
+  return tail.length > 0
+    ? tail.join('\n')
+    : `Audit log at ${logPath} is empty.`;
+}
 
 // ─── Dispatcher ─────────────────────────────────────────────────────────────────────────────────
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -2723,6 +2763,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await deployApp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
       case 'deploy_vps_mcp':
         return await deployVpsMcp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
+      case 'read_audit_log':
+        return await readAuditLog(parseNum(args.lines, 20));
       case 'get_deploy_status':
         return await getDeployStatus((args.job_id as string) ?? '');
       default:
