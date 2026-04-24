@@ -39,7 +39,7 @@ Fifteen tools across multiple categories:
 - `read_file_section`, `search_file` — read files in allowed directories
 
 **Deploy pipeline**
-- `deploy` (sharpedge) / `deploy_vps_mcp` — `git pull` → `npm install` → `npm run build` → `pm2 restart` → `pm2 status`
+- `deploy` / `deploy_vps_mcp` — `git pull` → `npm install` → `npm run build` → `pm2 restart` → `pm2 status`
 - `get_deploy_status`, `get_job_status` — poll background deploy jobs
 - `git_pull`, `git_push` — explicit git ops
 - `restart_process` — PM2 restart with optional env refresh

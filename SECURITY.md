@@ -326,11 +326,11 @@ vps-control-mcp undergoes regular security review:
 - **Dependency Scanning:** Regular updates to address known vulnerabilities
 - **Incident Response:** Security issues are handled through responsible disclosure and rapid patching
 
-Organizations with specific security requirements should contact the security team at security@sharpedge.io.
+Organizations with specific security requirements should contact the security team at security@forgerift.io.
 
 ## Contact & Reporting
 
-To report a security vulnerability, email security@sharpedge.io with:
+To report a security vulnerability, email security@forgerift.io with:
 
 - Description of the vulnerability
 - Steps to reproduce

@@ -228,7 +228,7 @@ Clean pass: zero CRITICAL, zero HIGH findings against the v1.8.1 rebrand. Three 
 
 ### Rebrand + public release
 
-- Rebranded from SharpEdge-specific to generic multi-cloud VM control plane.
+- Rebranded from single-app-specific to generic multi-cloud VM control plane.
 - `APP_DIR` now required env (no default); deploy enum collapsed to `app | self`; sensitive-path carveout derived from `path.basename(CONFIG.APP_DIR)` at module load; `ALLOWED_PROCESSES=[]` default.
 - Repo flipped public on the ForgeRift org with security features enabled (Dependabot, CodeQL, secret scanning, push protection).
 - First single-commit public release. Bundled sixth-pass adversarial findings F-OP-37/38/44/45.

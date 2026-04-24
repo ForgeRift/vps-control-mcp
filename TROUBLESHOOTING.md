@@ -26,6 +26,6 @@ Commands that take longer than 30 seconds should use `run_in_background=true`. T
 
 - **Command chaining blocked:** `&&`, `;`, backticks, `node -e`, `npx` are all blocked by the security model. Use separate tool calls or `git -C` workaround for multi-step operations.
 - **Commit message quote stripping:** Spaces in git commit messages cause issues when passed through the MCP. Use hyphenated messages without quotes.
-- **read_file_section path restriction:** File reads are restricted to `/root/sharpedge` and `/root/.pm2/logs`. Files outside these directories must be accessed via `run_approved_command` with `cat` or `head`.
+- **read_file_section path restriction:** File reads are restricted to `ALLOWED_READ_DIRS` (set in `.env`, defaults to your `APP_DIR` and `PM2_LOG_DIR`). Files outside these directories must be accessed via `run_approved_command` with `cat` or `head`.
 - **`.env` file access blocked:** Reading `.env` files is blocked by the sensitive file guard (info-leak category). This is correct security behavior — environment variables should not be exposed via MCP.
 - **72 restarts since last deploy:** The high restart count on `vps-mcp` in PM2 is expected — each deploy_vps_mcp call restarts the process. This is not indicative of instability.

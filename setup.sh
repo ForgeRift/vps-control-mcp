@@ -295,6 +295,6 @@ echo "────────────────────────�
 echo "  Support"
 echo "────────────────────────────────────────────────────────"
 echo ""
-echo "  Docs:     https://github.com/claudedussy/vps-control-mcp"
-echo "  Support:  Telegram bot at t.me/SharpEdgeMcpBot"
+echo "  Docs:     https://github.com/ForgeRift/vps-control-mcp"
+echo "  Support:  support@forgerift.io"
 echo ""

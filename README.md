@@ -82,7 +82,7 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 | `APP_DIR` | — | Root directory for allowed file reads and git operations |
 | `PM2_LOG_DIR` | ~/.pm2/logs | Where PM2 writes process logs |
 | `AUDIT_LOG_PATH` | ./audit.log | Immutable audit trail |
-| `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "sharpedge-api,vps-mcp") |
+| `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
