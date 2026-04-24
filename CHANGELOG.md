@@ -6,6 +6,16 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ---
 
+## [1.10.7] — 2026-04-24
+
+### Fixed
+
+- **Auto-reconnect** — Cowork SSE clients that reconnect after a vps-mcp restart now transparently restore their session instead of receiving a 404 and dropping the connection. A GET on an unknown session ID recreates the server+transport under the original session ID. PM2 `kill_timeout` bumped to 8 000 ms (from default 1 600 ms) to give in-flight requests time to complete before SIGKILL. SIGTERM/SIGINT handlers added for clean shutdown.
+- **Layer 2 / Layer 3 parse-failure** — Verdict scan now checks all non-empty lines with BLOCKED > PROCEED WITH CAUTION > PASS priority order, instead of inspecting only the last non-empty line. Fixes intermittent BLOCKED responses caused by the model appending trailing notes after the verdict. Truncated response logged on unexpected format.
+- **`get_recent_errors` log access** — PM2 logs at `/root/.pm2/logs/` were blocked by `APP_DIR_ROOT_CARVEOUT` (designed for user-controlled paths). `getRecentErrors` now performs a targeted PM2_LOG_DIR bounds check instead of routing through `validatePath`, so operators can read process logs via MCP without needing a VPS CMD session. Process name is still validated against `ALLOWED_PROCESSES` before the path is constructed.
+
+---
+
 ## [1.10.4] - 2026-04-23
 
 ### Security - F-OP-81 / F-OP-83 / F-OP-84 / F-OP-85 (S65 closure)
