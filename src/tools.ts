@@ -1409,11 +1409,19 @@ async function blockedTierLayer2(cmd: string, context: string): Promise<string |
       messages: [{ role: 'user', content: prompt }],
     });
     const text = ((message.content[0] as { type: string; text: string }).text ?? '').trim();
-    if (text.toUpperCase().startsWith('BLOCKED')) return text;
+    // Scan all lines for verdict (priority: BLOCKED > PASS).
+    // Using all-lines scan instead of only checking the first/last line prevents
+    // parse-failures when the model adds a trailing note after the verdict.
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    for (const line of lines) {
+      if (line.toUpperCase().startsWith('BLOCKED')) return line;
+    }
     // C11: PASS must include the nonce to prove it wasn't forged by prompt injection
-    if (text.toUpperCase().startsWith('PASS') && text.includes(nonce)) return null;
+    for (const line of lines) {
+      if (line.toUpperCase().startsWith('PASS') && line.includes(nonce)) return null;
+    }
     // Default-BLOCKED: unexpected response format treated as unsafe
-    console.warn('[BLOCKED-TIER] Layer 2 unexpected response format — defaulting to BLOCKED');
+    console.warn('[BLOCKED-TIER] Layer 2 unexpected response format — defaulting to BLOCKED. Response:', text.slice(0, 200));
     return `BLOCKED: parse-failure — classifier returned unexpected response format`;
   } catch (err) {
     const reason = (err as Error).message;
@@ -1465,11 +1473,21 @@ async function blockedTierLayer3(cmd: string, context: string): Promise<{ blocke
       messages: [{ role: 'user', content: prompt }],
     });
     const text = ((message.content[0] as { type: string; text: string }).text ?? '').trim();
-    const lastLine = text.split('\n').reverse().find(l => l.trim().length > 0) ?? '';
-    if (lastLine.toUpperCase().startsWith('BLOCKED')) return { blocked: lastLine, warning: null };
-    if (lastLine.toUpperCase().startsWith('PROCEED WITH CAUTION')) return { blocked: null, warning: `⚠️  SAFETY BOARD WARNING (Layer 3)\n${lastLine}` };
-    if (lastLine.toUpperCase().startsWith('PASS') && lastLine.includes(nonce)) return { blocked: null, warning: null };
-    console.warn('[BLOCKED-TIER] Layer 3 unexpected response format — defaulting to BLOCKED');
+    // Scan all lines for verdict (priority: BLOCKED > PROCEED WITH CAUTION > PASS).
+    // Using all-lines scan instead of only the last line prevents parse-failures when
+    // the model appends a trailing note or explanation after the verdict line.
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    for (const line of lines) {
+      if (line.toUpperCase().startsWith('BLOCKED')) return { blocked: line, warning: null };
+    }
+    for (const line of lines) {
+      if (line.toUpperCase().startsWith('PROCEED WITH CAUTION')) return { blocked: null, warning: `⚠️  SAFETY BOARD WARNING (Layer 3)\n${line}` };
+    }
+    // C11: PASS must include the nonce to prove it wasn't forged by prompt injection
+    for (const line of lines) {
+      if (line.toUpperCase().startsWith('PASS') && line.includes(nonce)) return { blocked: null, warning: null };
+    }
+    console.warn('[BLOCKED-TIER] Layer 3 unexpected response format — defaulting to BLOCKED. Response:', text.slice(0, 200));
     return { blocked: `BLOCKED: parse-failure — board returned unexpected response format`, warning: null };
   } catch (err) {
     const reason = (err as Error).message;
