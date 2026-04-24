@@ -38,15 +38,22 @@ function validateAuditLogPath(p: string): string {
   return p;
 }
 
+// Resolve APP_DIR first so AUDIT_LOG_PATH can default to a path inside it,
+// guaranteeing the audit log is always within the read allowlist without any
+// extra configuration.
+const APP_DIR = requireEnv('APP_DIR', '/root/myapp');
+
 export const CONFIG = {
   PORT:           parseInt(process.env.PORT || '3001'),
   // APP_DIR is the absolute path to the user's application on this VM — the
   // directory vps-control-mcp is permitted to read files from and deploy into.
   // Required. No default: a wrong default would silently expand the server's
   // read surface to someone else's filesystem layout.
-  APP_DIR:        requireEnv('APP_DIR', '/root/myapp'),
+  APP_DIR,
   PM2_LOG_DIR:    process.env.PM2_LOG_DIR    || '/root/.pm2/logs',
-  AUDIT_LOG_PATH: validateAuditLogPath(process.env.AUDIT_LOG_PATH || '/root/mcp-audit.log'),
+  // Default audit log lives inside APP_DIR so read_file_section can access it
+  // without extra allowlist config. Override via AUDIT_LOG_PATH env var.
+  AUDIT_LOG_PATH: validateAuditLogPath(process.env.AUDIT_LOG_PATH || path.join(APP_DIR, 'mcp-audit.log')),
 
   // Hard read limits — enforced at server level, not by judgment
   MAX_LOG_LINES:    50,
