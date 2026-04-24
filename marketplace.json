@@ -3,10 +3,10 @@
     {
       "id": "vps-control",
       "name": "VPS Control (ForgeRift VPS Shell)",
-      "description": "Connect Claude to the ForgeRift VPS Shell (DigitalOcean VPS) via MCP — run commands, inspect PM2 logs, restart processes, and manage the server from Cowork.",
+      "description": "Connect Claude to a Linux VPS via MCP - run commands, inspect PM2 logs, restart processes, and manage the server from Cowork.",
       "source": {
         "type": "github",
-        "repo": "claudedussy/vps-control-mcp",
+        "repo": "forgerift/vps-control-mcp",
         "ref": "main"
       }
     }
