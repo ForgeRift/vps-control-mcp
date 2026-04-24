@@ -2003,12 +2003,19 @@ async function getRecentErrors(processName: string, lines: number): Promise<stri
     return `No error log at ${logPath}. The process may not have produced errors yet, or the log path differs on this system.`;
   }
 
-  // Seventh-pass Opus note: defence-in-depth. validateProcess already restricts
-  // processName to exact ALLOWED_PROCESSES strings, so today path.join cannot be
-  // tricked — but routing the constructed logPath through validatePath makes the
-  // file reader symmetric with readFileSection and neutralises any future
-  // regression that loosens validateProcess.
-  const safeLogPath = validatePath(logPath);
+  // The path is fully controlled: CONFIG.PM2_LOG_DIR is operator-set and
+  // processName is validated against ALLOWED_PROCESSES above. We do NOT route
+  // through validatePath here because APP_DIR_ROOT_CARVEOUT (which blocks
+  // /root/* outside APP_DIR) would incorrectly block /root/.pm2/logs/ — a
+  // legitimate, operator-configured read-only target. Instead, confirm the
+  // resolved path is rooted inside PM2_LOG_DIR as a targeted bounds check.
+  const resolvedLogPath = path.resolve(logPath);
+  const resolvedLogDir  = path.resolve(CONFIG.PM2_LOG_DIR);
+  if (resolvedLogPath !== resolvedLogDir &&
+      !resolvedLogPath.startsWith(resolvedLogDir + path.sep)) {
+    throw new Error('Log path outside PM2_LOG_DIR — internal configuration error.');
+  }
+  const safeLogPath = resolvedLogPath;
 
   const { stdout } = await exec('tail', ['-n', String(cappedLines), safeLogPath]);
   const result = stdout.trim();
