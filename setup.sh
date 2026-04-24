@@ -47,7 +47,7 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 
-# Convert IP dots to dashes for sslip.io domain (e.g. 104.131.74.82 → 104-131-74-82.sslip.io)
+# Convert IP dots to dashes for sslip.io domain (e.g. 1.2.3.4 → 1-2-3-4.sslip.io)
 SSLIP_DOMAIN="${PUBLIC_IP//./-}.sslip.io"
 MCP_URL="https://${SSLIP_DOMAIN}/mcp"
 

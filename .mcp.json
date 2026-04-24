@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "vps-control": {
-      "type": "sse",
-      "url": "http://104.131.74.82:3001/sse"
-    }
-  }
-}
