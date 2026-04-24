@@ -195,11 +195,18 @@ Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Co
 
 ![Audit log](docs/media/vps-control_05_audit-log.gif)
 
+## Documentation
+
+- **[GETTING_STARTED.md](GETTING_STARTED.md)** — Step-by-step setup guide for new users
+- **[COMMANDS.md](COMMANDS.md)** — Plain-English breakdown of all GREEN/AMBER/RED command categories
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Common issues and fixes
+- **[SECURITY.md](SECURITY.md)** — Full security model and configuration reference
+
 ## Support
 
 - **Issues:** [GitHub Issues](https://github.com/ForgeRift/vps-control-mcp/issues)
-- **Security:** Report to support@forgerift.io
-- **Documentation:** See `SECURITY.md`, `TROUBLESHOOTING.md`, and `ADVERSARIAL_REVIEW.md`
+- **Security:** Report vulnerabilities to security@forgerift.io
+- **General:** support@forgerift.io
 
 ---
 
