@@ -3,6 +3,8 @@
 
 ## Product Overview
 
+![vps-control tools panel](https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/docs/media/vps-control_01_tools.gif)
+
 **vps-control-mcp** gives Claude structured, audited SSH access to a remote Linux VPS. Deploy apps, inspect PM2 processes, read logs, restart services, and check system health — all from Cowork, without opening a terminal or handing Claude an unguarded SSH session.
 
 Every command passes through a three-tier security model with 120+ hard-blocked dangerous patterns. PM2-aware, systemd-aware, audit-logged. Designed for the common "I have a DigitalOcean droplet running Node/Python/Docker and want Claude to help me operate it" case.
@@ -24,6 +26,8 @@ Every command passes through a three-tier security model with 120+ hard-blocked 
 - **Twelve Adversarial Review Rounds** — Hardened against 80+ filed bypass findings. Every closure is documented in `ADVERSARIAL_REVIEW.md`.
 
 ## What Claude Can Do
+
+![Deploy pipeline demo](https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/docs/media/vps-control_03_deploy.gif)
 
 Fifteen tools across multiple categories:
 
@@ -87,6 +91,8 @@ All settings live in `.env` (auto-generated):
 | `RATE_LIMIT_PER_MIN` | `60` | Max requests per minute |
 | `ANTHROPIC_API_KEY` | unset | Enables Layer 2/3 AI classifier review (optional, falls open if unset) |
 | `BYPASS_BINARIES` | empty | Advanced: `<binary>:<category>,...` demotion list |
+
+![RED-tier block demo](https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/docs/media/vps-control_04_red-block.gif)
 
 ## Security Highlights
 

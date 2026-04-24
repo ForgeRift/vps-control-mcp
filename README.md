@@ -1,10 +1,12 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/anthropics/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.10.6-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
-Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers—all from AI workflows with cryptographic guarantees and real-time monitoring.
+Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers — all through structured tools with a three-tier security model and full audit logging.
+
+![vps-control tools panel](docs/media/vps-control_01_tools.gif)
 
 ## What It Does
 
@@ -40,12 +42,14 @@ Additionally:
 
 For the full security model, see [SECURITY.md](SECURITY.md).
 
+![RED-tier block demo](docs/media/vps-control_04_red-block.gif)
+
 ## Installation
 
 ### Quick Start
 
 ```bash
-curl https://raw.githubusercontent.com/anthropics/vps-control-mcp/main/setup.sh | bash
+curl https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/setup.sh | bash
 ```
 
 The setup script:
@@ -58,7 +62,7 @@ The setup script:
 ### Manual Installation
 
 ```bash
-git clone https://github.com/anthropics/vps-control-mcp.git
+git clone https://github.com/ForgeRift/vps-control-mcp.git
 cd vps-control-mcp
 npm install
 npm run build
@@ -98,6 +102,8 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 - `get_recent_errors` — Tail error logs for a specific PM2 process
 - `get_system_health` — Disk usage, memory, and uptime
 
+![PM2 status demo](docs/media/vps-control_02_pm2-status.gif)
+
 ### File Access (2 tools)
 
 - `read_file_section` — Read a range of lines from an allowed file
@@ -115,6 +121,8 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 - `deploy` — Full sequence: pull → install → build → restart → health check
 - `deploy_vps_mcp` — Specialized deploy for this server itself
 - `get_deploy_status` — Poll a background deploy job
+
+![Deploy pipeline demo](docs/media/vps-control_03_deploy.gif)
 
 ### Process Control (1 tool)
 
@@ -173,12 +181,14 @@ vps-control-mcp uses **streamable HTTP** with automatic reconnection:
 
 MIT. See [LICENSE](LICENSE) for details.
 
+![Audit log](docs/media/vps-control_05_audit-log.gif)
+
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/anthropics/vps-control-mcp/issues)
-- **Security:** Report to security@anthropic.com
-- **Documentation:** [Full docs](docs/)
+- **Issues:** [GitHub Issues](https://github.com/ForgeRift/vps-control-mcp/issues)
+- **Security:** Report to support@forgerift.io
+- **Documentation:** See `SECURITY.md`, `TROUBLESHOOTING.md`, and `ADVERSARIAL_REVIEW.md`
 
 ---
 
-**Built by Anthropic** | [Cloud documentation](https://modelcontextprotocol.io/)
+**Built by ForgeRift LLC** | [forgerift.io](https://forgerift.io)
