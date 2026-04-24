@@ -9,7 +9,7 @@ Check that the MCP process is running: SSH to VPS and run `pm2 status vps-mcp`. 
 Disconnect the connector in Cowork settings, wait 10 seconds, then reconnect. The "server disconnected" flash during reconnection is normal — it's the OAuth handshake completing. If it persists, check that the OAuth discovery endpoint is reachable at your VPS domain.
 
 **Commands blocked unexpectedly**
-The three-tier security model (RED/AMBER/GREEN) blocks 100+ dangerous patterns server-side. Check the error message for the category. Common false positives: `&&` and `;` in awk/sed expressions trigger the chaining block. Workaround: use `git -C <path>` instead of `cd <path> && git ...`, or use separate tool calls.
+The three-tier security model (RED/AMBER/GREEN) blocks 275+ dangerous patterns server-side. Check the error message for the category. Common false positives: `&&` and `;` in awk/sed expressions trigger the chaining block. Workaround: use `git -C <path>` instead of `cd <path> && git ...`, or use separate tool calls.
 
 **Git commit message gets mangled**
 The VPS MCP strips quotes from git commit messages when they contain spaces. Workaround: use hyphenated-no-space commit messages (e.g., `security-hardening-v1.2.0` instead of `"security hardening v1.2.0"`).
@@ -28,4 +28,11 @@ Commands that take longer than 30 seconds should use `run_in_background=true`. T
 - **Commit message quote stripping:** Spaces in git commit messages cause issues when passed through the MCP. Use hyphenated messages without quotes.
 - **read_file_section path restriction:** File reads are restricted to `ALLOWED_READ_DIRS` (set in `.env`, defaults to your `APP_DIR` and `PM2_LOG_DIR`). Files outside these directories must be accessed via `run_approved_command` with `cat` or `head`.
 - **`.env` file access blocked:** Reading `.env` files is blocked by the sensitive file guard (info-leak category). This is correct security behavior — environment variables should not be exposed via MCP.
-- **72 restarts since last deploy:** The high restart count on `vps-mcp` in PM2 is expected — each deploy_vps_mcp call restarts the process. This is not indicative of instability.
+- **High restart count in PM2:** A large restart count on `vps-mcp` is expected — each `deploy_vps_mcp` call restarts the process. This is not indicative of instability. Concern only if the process is in a crash loop (restart count climbing in real-time with no deploys in progress).
+- **Auto-reconnect after deploy:** Each deploy kills the active SSE connection. Cowork will reconnect automatically within a few seconds. If it doesn't, click the connector to reconnect manually.
+
+## Support
+
+- **GitHub Issues:** [github.com/ForgeRift/vps-control-mcp/issues](https://github.com/ForgeRift/vps-control-mcp/issues)
+- **Email:** support@forgerift.io
+- **Security vulnerabilities:** security@forgerift.io (90-day responsible disclosure)

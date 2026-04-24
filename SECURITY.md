@@ -186,7 +186,7 @@ All synchronous command execution has a 30-second hard timeout. Commands that ex
 
 ### Session Command Cap
 
-Sessions have a configurable maximum number of custom commands (default: 500 per session). This prevents token exhaustion attacks where an attacker uses a single token to execute unlimited reconnaissance. Once the cap is reached, the session must be rotated.
+Sessions have a configurable maximum number of custom commands (default: 10 per session, configurable via `MAX_CUSTOM_COMMANDS_PER_SESSION`). This prevents token exhaustion attacks where an attacker uses a single token to execute unlimited reconnaissance. Once the cap is reached, the session must be rotated.
 
 ### Audit Logging
 
@@ -201,7 +201,7 @@ Every command execution is logged with the following metadata:
 - Source IP address
 - Output size and status code
 
-Logs are stored in 10MB rotating files in `/var/log/vps-control-mcp/`. Old logs are compressed and retained for 30 days. All sensitive data (passwords, API keys, credit cards, SSH keys) are automatically redacted using pattern matching.
+Logs are stored at `AUDIT_LOG_PATH` (defaults to `{APP_DIR}/mcp-audit.log`) with 10MB rotation and one backup retained. All sensitive data (passwords, API keys, credit cards, SSH keys) are automatically redacted using pattern matching. Configure `AUDIT_MAX_SIZE_MB` to adjust the rotation threshold.
 
 ## Authentication & Authorization
 
@@ -211,7 +211,7 @@ vps-control-mcp supports two authentication modes: single-token and Supabase mul
 
 **Single-Token Mode**
 
-A single bearer token is configured at startup via the `AUTH_TOKEN` environment variable. All requests must include this token in the HTTP `Authorization: Bearer <token>` header. This is suitable for personal or small-team deployments.
+A single bearer token is configured at startup via the `MCP_AUTH_TOKEN` environment variable. All requests must include this token in the HTTP `Authorization: Bearer <token>` header. This is suitable for personal or small-team deployments.
 
 **Supabase Multi-Token Billing Mode**
 

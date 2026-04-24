@@ -12,11 +12,27 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 - **Auto-reconnect** — Cowork SSE clients that reconnect after a vps-mcp restart now transparently restore their session instead of receiving a 404 and dropping the connection. A GET on an unknown session ID recreates the server+transport under the original session ID. PM2 `kill_timeout` bumped to 8 000 ms (from default 1 600 ms) to give in-flight requests time to complete before SIGKILL. SIGTERM/SIGINT handlers added for clean shutdown.
 - **Layer 2 / Layer 3 parse-failure** — Verdict scan now checks all non-empty lines with BLOCKED > PROCEED WITH CAUTION > PASS priority order, instead of inspecting only the last non-empty line. Fixes intermittent BLOCKED responses caused by the model appending trailing notes after the verdict. Truncated response logged on unexpected format.
-- **`get_recent_errors` log access** — PM2 logs at `/root/.pm2/logs/` were blocked by `APP_DIR_ROOT_CARVEOUT` (designed for user-controlled paths). `getRecentErrors` now performs a targeted PM2_LOG_DIR bounds check instead of routing through `validatePath`, so operators can read process logs via MCP without needing a VPS CMD session. Process name is still validated against `ALLOWED_PROCESSES` before the path is constructed.
+- **`get_recent_errors` log access** — PM2 logs at `/root/.pm2/logs/` were blocked by `APP_DIR_ROOT_CARVEOUT`. `getRecentErrors` now performs a targeted PM2_LOG_DIR bounds check instead of routing through `validatePath`.
 
 ---
 
-## [1.10.4] - 2026-04-23
+## [1.10.6] — 2026-04-24
+
+### Added
+
+- **`read_audit_log` tool** — New read-only monitoring tool that surfaces the immutable MCP audit trail. Scoped to `AUDIT_LOG_PATH` (defaults to `{APP_DIR}/mcp-audit.log`). Respects `APP_DIR` access controls; audit path outside `APP_DIR` requires explicit `AUDIT_LOG_PATH` configuration. Returns last N lines with optional filter.
+
+---
+
+## [1.10.5] — 2026-04-24
+
+### Fixed
+
+- **`.mcp.json` removed from tracking** — Personal dev config file containing local VPS URL was accidentally tracked. Removed via `git rm --cached`, added to `.gitignore`. No sensitive tokens were in the file, but VPS IP was present; setup.sh example also updated to use a generic placeholder IP.
+
+---
+
+## [1.10.4] — 2026-04-23
 
 ### Security - F-OP-81 / F-OP-83 / F-OP-84 / F-OP-85 (S65 closure)
 

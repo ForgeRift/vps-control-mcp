@@ -1,7 +1,7 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.10.6-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.10.7-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
 Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers — all through structured tools with a three-tier security model and full audit logging.
@@ -10,7 +10,7 @@ Give Claude direct, audited control over your Linux VPS. Deploy applications, mo
 
 ## What It Does
 
-vps-control-mcp is a production-grade MCP server that exposes 15 structured tools for VPS management. Claude can:
+vps-control-mcp is a production-grade MCP server that exposes 16 structured tools for VPS management. Claude can:
 
 - **Deploy applications** via PM2 with automatic rollback on build failure
 - **Monitor processes** and tail error logs in real-time  
@@ -36,7 +36,7 @@ Three-tier access control prevents unauthorized operations:
 
 Additionally:
 - Sensitive files (.env, .ssh/, credentials) are blocked from all read operations, even within allowed directories
-- 100+ hard-blocked patterns across 20 security categories
+- 275+ hard-blocked patterns across 26 security categories
 - Request timeouts prevent runaway processes
 - Audit log with automatic 10MB rotation and secret redaction
 
@@ -81,7 +81,11 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 | `PORT` | 3001 | HTTP server port |
 | `APP_DIR` | — | Root directory for allowed file reads and git operations |
 | `PM2_LOG_DIR` | ~/.pm2/logs | Where PM2 writes process logs |
-| `AUDIT_LOG_PATH` | ./audit.log | Immutable audit trail |
+| `AUDIT_LOG_PATH` | {APP_DIR}/mcp-audit.log | Immutable audit trail |
+| `ANTHROPIC_API_KEY` | — | Required for Layer 2/3 AI classification (Haiku + Sonnet safety board) |
+| `BYPASS_BINARIES` | — | Comma-separated process names exempt from RED-tier blocking (logged as `[SECURITY-BYPASS]`) |
+| `LAYER3_MODEL` | claude-sonnet-4-5 | Model used for Layer 3 safety board classification |
+| `LAYER_STRICT_MODE` | false | If true, Layer 2/3 failures block rather than pass-through |
 | `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
@@ -96,11 +100,12 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 
 ## Available Tools
 
-### Monitoring (3 tools)
+### Monitoring (4 tools)
 
 - `get_pm2_status` — View all running processes with memory/CPU/uptime
 - `get_recent_errors` — Tail error logs for a specific PM2 process
 - `get_system_health` — Disk usage, memory, and uptime
+- `read_audit_log` — Read the immutable audit trail of all tool calls
 
 ![PM2 status demo](docs/media/vps-control_02_pm2-status.gif)
 
@@ -177,9 +182,16 @@ vps-control-mcp uses **streamable HTTP** with automatic reconnection:
 - **Ports:** 80 (Let's Encrypt validation), 443 (TLS), 3001 (app port)
 - **Firewall:** 22 (SSH), 80, 443 open outbound for package manager and Let's Encrypt
 
+## Pricing
+
+- **Individual:** $14.99/mo or $149/yr — [forgerift.io/#pricing](https://forgerift.io/#pricing)
+- **Bundle (vps-control-mcp + local-terminal-mcp):** $19.99/mo or $199/yr
+- **Founder Cohort:** $9.99/mo locked for the first 100 subscribers or 3 months post-marketplace approval (whichever comes first)
+- **14-day free trial** — no charge during trial period; no refunds after trial ends
+
 ## License
 
-MIT. See [LICENSE](LICENSE) for details.
+Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Converts to MIT four years after each version's release date.
 
 ![Audit log](docs/media/vps-control_05_audit-log.gif)
 
