@@ -1193,3 +1193,202 @@ describe('F-OP-46 — audit.ts uses expanded SECRET_VALUE_PREFIXES + expanded ke
     assert.doesNotMatch(src, narrowOnly, 'audit.ts must not use narrow-only prefix regex');
   });
 });
+
+// ─── Round 13 — F-OP-85..F-OP-96 fixes (S65 v1.12.0) ──────────────────────
+
+describe('F-OP-85 — service validator arg-position fix', () => {
+  // The bug: args[args.length-1] checked last arg, not position 1.
+  // "service nginx restart" has args=['nginx','restart'] → last=restart → correctly blocked.
+  // But "service nginx status extra" had args=['nginx','status','extra'] → last=extra → BLOCKED
+  // AND "service -H nginx status" → last=status → was incorrectly PASSING.
+
+  it('service nginx status passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('service nginx status')));
+
+  it('service nginx restart is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('service nginx restart'), /BLOCKED/));
+
+  it('service nginx stop is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('service nginx stop'), /BLOCKED/));
+
+  it('service with flag-like name is blocked (e.g. service -H nginx status)', () =>
+    assert.throws(() => validateAgainstAllowlist('service -H nginx status'), /BLOCKED/));
+
+  it('service with extra args is blocked (e.g. service nginx status extra)', () =>
+    assert.throws(() => validateAgainstAllowlist('service nginx status extra'), /BLOCKED/));
+
+  it('bare service is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('service'), /BLOCKED/));
+
+  it('service RED pattern now covers force-reload', () =>
+    expectBlocked('service nginx force-reload'));
+
+  it('service RED pattern now covers try-restart', () =>
+    expectBlocked('service nginx try-restart'));
+
+  it('service RED pattern now covers condrestart', () =>
+    expectBlocked('service nginx condrestart'));
+});
+
+describe('F-OP-86 — systemctl -H/--host/-M/--machine pivot blocked', () => {
+  it('systemctl -H remote status is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl -H remote status nginx'), /BLOCKED/));
+
+  it('systemctl --host=remote status is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl --host=remote status nginx'), /BLOCKED/));
+
+  it('systemctl -M container status is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl -M container status nginx'), /BLOCKED/));
+
+  it('systemctl --machine=box status is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl --machine=box status nginx'), /BLOCKED/));
+
+  it('systemctl -H remote is blocked by RED pattern too', () =>
+    expectBlocked('systemctl -H remote status nginx'));
+
+  it('systemctl status without pivot still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('systemctl status nginx')));
+});
+
+describe('F-OP-87 — systemctl show/cat removed from READ_ONLY', () => {
+  it('systemctl show nginx is blocked by validator', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl show nginx'), /BLOCKED/));
+
+  it('systemctl cat nginx.service is blocked by validator', () =>
+    assert.throws(() => validateAgainstAllowlist('systemctl cat nginx.service'), /BLOCKED/));
+
+  it('systemctl show blocked by RED pattern', () =>
+    expectBlocked('systemctl show nginx'));
+
+  it('systemctl cat blocked by RED pattern', () =>
+    expectBlocked('systemctl cat nginx.service'));
+
+  it('systemctl status still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('systemctl status nginx')));
+});
+
+describe('F-OP-88 — bare crontab (no args) blocked', () => {
+  it('bare crontab is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('crontab'), /BLOCKED/));
+
+  it('crontab -l still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('crontab -l')));
+
+  it('crontab -e is still blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('crontab -e'), /BLOCKED/));
+});
+
+describe('F-OP-89 — pm2 reload removed from allowlist', () => {
+  it('pm2 reload is blocked by allowlist validator', () =>
+    assert.throws(() => validateAgainstAllowlist('pm2 reload'), /BLOCKED/));
+
+  it('pm2 status still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 status')));
+
+  it('pm2 save still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 save')));
+});
+
+describe('F-OP-90 — pm2 flush blocked (audit-log-destruction)', () => {
+  it('pm2 flush is blocked by RED pattern', () =>
+    expectBlocked('pm2 flush'));
+
+  it('pm2 flush is blocked by HARD_BLOCKED pattern', () => {
+    const flushPattern = BLOCKED_PATTERNS.find(p =>
+      p.pattern.source.includes('pm2') && p.pattern.source.includes('flush'));
+    // pm2 flush is in HARD_BLOCKED; BLOCKED_PATTERNS check via validateCommand
+    assert.throws(() => validateCommand('pm2 flush'), /BLOCKED/);
+  });
+
+  it('pm2 flush is removed from allowlist validator', () =>
+    assert.throws(() => validateAgainstAllowlist('pm2 flush'), /BLOCKED/));
+
+  it('pm2 list still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('pm2 list')));
+});
+
+describe('F-OP-92 — dig @resolver and AXFR/IXFR blocked', () => {
+  it('dig google.com still passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('dig google.com')));
+
+  it('dig @8.8.8.8 google.com is blocked (custom resolver)', () =>
+    assert.throws(() => validateAgainstAllowlist('dig @8.8.8.8 google.com'), /BLOCKED/));
+
+  it('dig google.com AXFR is blocked (zone transfer)', () =>
+    assert.throws(() => validateAgainstAllowlist('dig google.com AXFR'), /BLOCKED/));
+
+  it('dig google.com IXFR is blocked (incremental zone transfer)', () =>
+    assert.throws(() => validateAgainstAllowlist('dig google.com IXFR'), /BLOCKED/));
+
+  it('dig -f /tmp/hosts is blocked (batch file)', () =>
+    assert.throws(() => validateAgainstAllowlist('dig -f /tmp/hosts'), /BLOCKED/));
+
+  it('nslookup google.com passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('nslookup google.com')));
+
+  it('bare nslookup (no args) is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('nslookup'), /BLOCKED/));
+
+  it('host google.com passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('host google.com')));
+
+  it('host -l google.com is blocked (zone transfer)', () =>
+    assert.throws(() => validateAgainstAllowlist('host -l google.com'), /BLOCKED/));
+
+  it('host --list google.com is blocked (zone transfer long form)', () =>
+    assert.throws(() => validateAgainstAllowlist('host --list google.com'), /BLOCKED/));
+});
+
+describe('F-OP-93 — crontab long-form flags blocked', () => {
+  it('crontab --edit is blocked by RED pattern', () =>
+    expectBlocked('crontab --edit'));
+
+  it('crontab --remove is blocked by RED pattern', () =>
+    expectBlocked('crontab --remove'));
+
+  it('crontab --user root is blocked by RED pattern', () =>
+    expectBlocked('crontab --user root -l'));
+
+  it('crontab -e is still blocked', () =>
+    expectBlocked('crontab -e'));
+});
+
+describe('F-OP-94 — systemctl new dangerous sub-commands blocked', () => {
+  it('systemctl set-environment is blocked', () =>
+    expectBlocked('systemctl set-environment MYVAR=val'));
+
+  it('systemctl unset-environment is blocked', () =>
+    expectBlocked('systemctl unset-environment MYVAR'));
+
+  it('systemctl import-environment is blocked', () =>
+    expectBlocked('systemctl import-environment'));
+
+  it('systemctl freeze nginx is blocked', () =>
+    expectBlocked('systemctl freeze nginx'));
+
+  it('systemctl thaw nginx is blocked', () =>
+    expectBlocked('systemctl thaw nginx'));
+
+  it('systemctl switch-root /newroot is blocked', () =>
+    expectBlocked('systemctl switch-root /newroot'));
+
+  it('systemctl link myservice.service is blocked', () =>
+    expectBlocked('systemctl link myservice.service'));
+
+  it('systemctl revert nginx is blocked', () =>
+    expectBlocked('systemctl revert nginx'));
+});
+
+describe('F-OP-95 — atq restricted to safe flags', () => {
+  it('atq with no args passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('atq')));
+
+  it('atq -V passes', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('atq -V')));
+
+  it('atq -q a passes (queue filter)', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('atq -q')));
+
+  it('atq with unknown flag is blocked', () =>
+    assert.throws(() => validateAgainstAllowlist('atq -f /etc/passwd'), /BLOCKED/));
+});

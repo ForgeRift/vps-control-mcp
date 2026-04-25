@@ -643,7 +643,7 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // --- Scheduled execution ---
   // crontab: blanket block replaced (S64 v1.11.0) with targeted pattern covering only
   // modification flags. "crontab -l" (read-only list) is now GREEN via validateCrontabArgs.
-  { pattern: /\bcrontab\b.*-[eru]\b/,   category: 'scheduled-exec',  reason: 'Crontab modification (-e edit, -r remove, -u user) is prohibited. Only "crontab -l" is permitted.' },
+  { pattern: /\bcrontab\b.*(-[eru]\b|--edit\b|--remove\b|--user\b)/,   category: 'scheduled-exec',  reason: 'Crontab modification (-e/--edit, -r/--remove, -u/--user) is prohibited. Only "crontab -l" is permitted.' },
   { pattern: /\bat\b\s/,                category: 'scheduled-exec',  reason: 'Scheduled command execution is prohibited. Use atq to list existing jobs.' },
 
   // --- Service management ---
@@ -651,9 +651,9 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // that block only dangerous sub-commands. Read-only sub-commands (status, is-active,
   // is-enabled, list-units, show, cat) are now GREEN via validateSystemctlArgs /
   // validateServiceArgs in POSITIVE_ALLOWLIST. Defense-in-depth: both layers must pass.
-  { pattern: /\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|daemon-reexec|reset-failed|poweroff|halt|reboot|kexec|suspend|hibernate|hybrid-sleep|kill|edit|set-default|isolate|rescue|emergency)\b/i,
-    category: 'service-mgmt',    reason: 'Destructive systemctl sub-command. Read-only sub-commands (status, is-active, is-enabled, list-units) are permitted.' },
-  { pattern: /\bservice\s+\S+\s+(start|stop|restart|reload|enable|disable)\b/i,
+  { pattern: /\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|daemon-reexec|reset-failed|poweroff|halt|reboot|kexec|suspend|hibernate|hybrid-sleep|kill|edit|set-default|isolate|rescue|emergency|set-environment|unset-environment|import-environment|link|revert|switch-root|freeze|thaw|show|cat)\b/i,
+    category: 'service-mgmt',    reason: 'Destructive or env-exposing systemctl sub-command. Read-only sub-commands (status, is-active, is-enabled, list-units, list-unit-files, list-sockets, list-timers) are permitted.' },
+  { pattern: /\bservice\s+\S+\s+(start|stop|restart|reload|enable|disable|force-reload|try-restart|condrestart|force-stop)\b/i,
     category: 'service-mgmt',    reason: 'Destructive service action. Only "service <name> status" is permitted.' },
 
   // --- Code execution bypasses ---
@@ -1033,6 +1033,10 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   { pattern: /\bcat\s+\/dev\/null\s*>\s*~?\/\.bash_history\b/i,               category: 'audit-log-destruction' },
   { pattern: /\bjournalctl\b[^|&;\n]*--vacuum-size=0\b/i,                     category: 'audit-log-destruction' },
   { pattern: /\bsystemctl\b[^|&;\n]*(stop|disable)\b[^|&;\n]*\bauditd\b/i,   category: 'audit-log-destruction' },
+  // F-OP-90: pm2 flush destroys all log evidence
+  { pattern: /\bpm2\s+flush\b/i,                                                category: 'audit-log-destruction' },
+  // F-OP-86: systemctl -H/--host/-M/--machine pivots execution to remote hosts
+  { pattern: /\bsystemctl\b[^|&;\n]*(-H\b|--host[=\s]|--machine[=\s]|-M\b)/i, category: 'ssh-tunnel-pivot' },
 
   // ── Category 11: Container / orchestration nuclear ────────────────────────
   { pattern: /\bdocker\b[^|&;\n]*\bsystem\b[^|&;\n]*\bprune\b[^|&;\n]*-[a-zA-Z]*[af]/i, category: 'container-nuclear' },
@@ -1689,9 +1693,10 @@ function allowFlags(...permitted: string[]): ArgValidator {
 const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
     'status', 'list', 'ls', 'logs', 'monit',
-    'id', 'version', '--version', '-v', 'flush',
+    'id', 'version', '--version', '-v',
+    // F-OP-90: flush removed — destroys all pm2 log evidence
     'save',   // persists current process list to disk — bounded write, fully recoverable
-    'reload', // graceful reload — AMBER warning applied separately via checkAmberWarnings
+    // F-OP-89: reload removed from read-only — triggers live process restart (lifecycle-affecting)
   ]);
   const sub = args[0];
   if (!sub) return null;
@@ -1889,12 +1894,20 @@ const validateFindArgs: ArgValidator = (args) => {
 // poweroff, halt, reboot) are blocked. Additional defence-in-depth from
 // HARD_BLOCKED_PATTERNS entries covering systemctl poweroff/halt/reboot and
 // the systemctl stop/disable auditd pattern.
+// F-OP-86: -H/--host/-M/--machine pivots command execution to a remote host over SSH.
+// F-OP-87: show/cat removed — they dump full unit environment (may expose secrets).
 const validateSystemctlArgs: ArgValidator = (args) => {
   const READ_ONLY = new Set([
     'status', 'is-active', 'is-enabled', 'is-failed',
     'list-units', 'list-unit-files', 'list-sockets', 'list-timers',
-    'show', 'cat', 'help', '--version', '-v',
+    'help', '--version', '-v',
   ]);
+  // F-OP-86: block remote-host pivot flags before sub-command check
+  for (const a of args) {
+    if (a === '-H' || a === '-M' || a.startsWith('--host') || a.startsWith('--machine')) {
+      return `systemctl flag "${a}" is not permitted — remote host pivot is blocked.`;
+    }
+  }
   const sub = args[0];
   if (!sub) return `systemctl requires a sub-command. Allowed: ${[...READ_ONLY].join(', ')}.`;
   if (!READ_ONLY.has(sub)) {
@@ -1907,11 +1920,19 @@ const validateSystemctlArgs: ArgValidator = (args) => {
 
 // service: read-only 'status' only (S64 v1.11.0).
 // service <name> start/stop/restart/reload/enable/disable are blocked.
+// F-OP-85: was checking args[args.length-1] (last arg) — wrong. Action is at args[1].
 const validateServiceArgs: ArgValidator = (args) => {
   if (args.length < 2) {
-    return `service requires: service <name> status`;
+    return `service requires exactly: service <name> status`;
   }
-  const action = args[args.length - 1];
+  if (args.length > 2) {
+    return `service: too many arguments (expected: service <name> status).`;
+  }
+  const name = args[0];
+  if (name.startsWith('-')) {
+    return `service: service name "${name}" looks like a flag — not permitted.`;
+  }
+  const action = args[1];
   if (action !== 'status') {
     return `service action "${action}" is not permitted. Only "service <name> status" is allowed. ` +
       `Use restart_process for lifecycle management.`;
@@ -1922,7 +1943,8 @@ const validateServiceArgs: ArgValidator = (args) => {
 // crontab: read-only -l (list) only (S64 v1.11.0).
 // -e (edit), -r (remove), -u (user switch) are blocked.
 const validateCrontabArgs: ArgValidator = (args) => {
-  if (args.length === 0 || (args.length === 1 && args[0] === '-l')) return null;
+  // F-OP-88: bare crontab (no args) opens interactive editor — not permitted
+  if (args.length === 1 && args[0] === '-l') return null;
   const blocked = new Set(['-e', '-r', '-u']);
   for (const a of args) {
     if (blocked.has(a)) {
@@ -1936,14 +1958,31 @@ const validateCrontabArgs: ArgValidator = (args) => {
   return null;
 };
 
-// dig: DNS lookup. Block batch file input and bind-interface flags.
+// dig: DNS lookup. Block batch file, bind-interface, @resolver pivots, and AXFR/IXFR.
+// F-OP-92: @resolver routes queries through attacker-controlled DNS server.
+// F-OP-92: AXFR/IXFR = full zone transfer — enumerates all hostnames.
 const validateDigArgs: ArgValidator = (args) => {
   const BLOCKED_FLAGS = new Set(['-f', '-b']);
+  const BLOCKED_QTYPES = new Set(['axfr', 'ixfr', 'AXFR', 'IXFR']);
   for (const a of args) {
-    if (BLOCKED_FLAGS.has(a)) {
-      return `dig flag "${a}" is not permitted.`;
-    }
+    if (BLOCKED_FLAGS.has(a)) return `dig flag "${a}" is not permitted.`;
+    if (a.startsWith('@')) return `dig "${a}" is not permitted — custom resolver pivots are blocked.`;
+    if (BLOCKED_QTYPES.has(a)) return `dig query type "${a}" is not permitted — zone transfers are blocked.`;
   }
+  return null;
+};
+
+// F-OP-92: host -l performs a zone transfer (equivalent to AXFR).
+const validateHostArgs: ArgValidator = (args) => {
+  for (const a of args) {
+    if (a === '-l' || a === '--list') return `host flag "${a}" is not permitted — zone transfer mode is blocked.`;
+  }
+  return null;
+};
+
+// F-OP-92: bare nslookup drops into interactive mode — require at least one arg.
+const validateNslookupArgs: ArgValidator = (args) => {
+  if (args.length === 0) return `nslookup requires at least one argument (hostname or IP).`;
   return null;
 };
 
@@ -2023,13 +2062,14 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
 
   // ── Scheduled job inspection (read-only) — S64 v1.11.0 ──────────────────
   'crontab':  { description: 'List cron jobs (-l only)',            argValidator: validateCrontabArgs },
-  'atq':      { description: 'List scheduled at-jobs (read-only)', argValidator: allowAny },
+  // F-OP-95: restrict atq to safe flags only
+  'atq':      { description: 'List scheduled at-jobs (read-only)', argValidator: allowFlags('-V', '--version', '-q') },
 
   // ── DNS lookups — S64 v1.11.0 ────────────────────────────────────────────
   // DNS queries do not expose server secrets. Standard observability tools.
   'dig':      { description: 'DNS lookup',                          argValidator: validateDigArgs },
-  'nslookup': { description: 'DNS lookup',                          argValidator: allowAny },
-  'host':     { description: 'DNS lookup',                          argValidator: allowAny },
+  'nslookup': { description: 'DNS lookup',                          argValidator: validateNslookupArgs },
+  'host':     { description: 'DNS lookup',                          argValidator: validateHostArgs },
 };
 
 function validateAgainstAllowlist(command: string): void {
@@ -2114,11 +2154,17 @@ function findPm2Log(processName: string, type: 'out' | 'error'): string | null {
   const candidates = entries
     .filter(f => f.startsWith(prefix) && f.endsWith('.log'))
     .map(f => path.join(resolvedLogDir, f))
-    // Bounds check: every candidate must resolve inside PM2_LOG_DIR
+    // Bounds check: every candidate must resolve inside PM2_LOG_DIR.
+    // F-OP-91: path.resolve() does NOT follow symlinks — use fs.realpathSync() so a
+    // symlink inside PM2_LOG_DIR pointing outside it is caught.
     .filter(p => {
-      const resolved = path.resolve(p);
-      return resolved !== resolvedLogDir &&
-             resolved.startsWith(resolvedLogDir + path.sep);
+      try {
+        const resolved = fs.realpathSync(p);
+        return resolved !== resolvedLogDir &&
+               resolved.startsWith(resolvedLogDir + path.sep);
+      } catch {
+        return false; // broken symlink or permission error — skip
+      }
     });
 
   if (candidates.length === 0) return null;
@@ -2898,6 +2944,15 @@ export const TOOLS = [
 async function readAuditLog(lines: number): Promise<string> {
   const clampedLines = Math.min(Math.max(lines, 1), CONFIG.MAX_FILE_LINES);
   const logPath = CONFIG.AUDIT_LOG_PATH;
+
+  // F-OP-96: If AUDIT_LOG_PATH is set to a sensitive file (e.g. /etc/shadow),
+  // this dedicated tool would bypass the standard SENSITIVE_FILE_PATTERNS gate.
+  for (const pattern of SENSITIVE_FILE_PATTERNS) {
+    if (pattern !== APP_DIR_ROOT_CARVEOUT && pattern.test(logPath)) {
+      return `⛔ BLOCKED: AUDIT_LOG_PATH "${logPath}" matches a sensitive file pattern. ` +
+        `Reconfigure AUDIT_LOG_PATH to a non-sensitive location.`;
+    }
+  }
 
   if (!fs.existsSync(logPath)) {
     return `Audit log not found at ${logPath}. No tool calls have been logged yet, or AUDIT_LOG_PATH is misconfigured.`;

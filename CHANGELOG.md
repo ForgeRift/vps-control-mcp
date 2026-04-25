@@ -4,6 +4,40 @@ All notable changes to vps-control-mcp.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-04-25
+
+### Security — Adversarial Review Round 13 (F-OP-85..F-OP-97)
+
+13 findings from targeted Opus review of v1.10.8 + v1.11.0 changes. 0 CRITICAL, 3 HIGH, 5 MEDIUM, 5 LOW.
+
+**HIGH**
+
+- **F-OP-85 — service validator arg-position bug** — `validateServiceArgs` was checking `args[args.length - 1]` (last arg) instead of `args[1]` (action position). In `service nginx restart`, both positions coincide — so tests passed — but `service nginx status extra` would have passed (last arg = "extra" ≠ "status" → blocked). More critically: `service -H nginx status` (flag-injection in name slot) was passing. Fixed: check `args[1]`, enforce `args.length === 2`, reject name values starting with `-`. Service RED pattern extended to cover `force-reload`, `try-restart`, `condrestart`, `force-stop`.
+- **F-OP-86 — systemctl -H/--host/-M/--machine SSH pivot not blocked** — `-H`/`--host` and `-M`/`--machine` route systemctl commands to a remote host over SSH, enabling lateral movement. Fixed: arg loop in `validateSystemctlArgs` checks for these flags before sub-command dispatch. HARD_BLOCKED pattern added as defense-in-depth.
+- **F-OP-87 — systemctl show/cat env leak** — `show` and `cat` were in `validateSystemctlArgs` READ_ONLY set (v1.11.0). `systemctl show <unit>` dumps the full unit environment including any `Environment=` or `EnvironmentFile=` directives, which may contain `MCP_AUTH_TOKEN` or `DATABASE_URL`. Removed from READ_ONLY. Added to RED pattern (`systemctl show|cat` now triggers `service-mgmt` block). Same parity as F-OP-6/7 closures for `ps`/`env`.
+
+**MEDIUM**
+
+- **F-OP-88 — bare crontab opens interactive editor** — `validateCrontabArgs` allowed `args.length === 0` (bare `crontab`), which drops into an interactive vi/vi-compatible editor. Only `crontab -l` is intended. Removed the `args.length === 0` branch.
+- **F-OP-89 — pm2 reload lifecycle-affecting** — `reload` was in the `validatePm2Args` READ_ONLY set. In fork mode it causes a full restart (brief downtime); in cluster mode it is zero-downtime rolling. Either way it's a lifecycle-affecting operation, not read-only. Removed from READ_ONLY. (AMBER warning via `checkAmberWarnings` remains.)
+- **F-OP-90 — pm2 flush destroys log evidence** — `flush` was in the `validatePm2Args` READ_ONLY set. `pm2 flush` truncates all log files managed by PM2 — equivalent to evidence destruction. Removed from READ_ONLY. Added HARD_BLOCKED pattern in `audit-log-destruction` category.
+- **F-OP-91 — findPm2Log symlink escape via path.resolve()** — `path.resolve()` does not follow symlinks; a symlink inside `PM2_LOG_DIR` pointing to `/etc/passwd` would pass the bounds check. Fixed: replaced `path.resolve(p)` with `fs.realpathSync(p)` (try/catch returning `false` on ENOENT/broken symlink).
+- **F-OP-92 — dig @resolver pivot and AXFR/IXFR zone transfer** — `validateDigArgs` did not block `@<resolver>` args (routes DNS through attacker-controlled resolver) or AXFR/IXFR query types (full/incremental zone transfer = hostname enumeration). `nslookup` accepted zero args (drops into interactive mode). `host -l` performs a zone transfer. Fixed: `validateDigArgs` blocks `@`-prefixed args and `AXFR`/`IXFR` query types. New `validateHostArgs` blocks `-l`/`--list`. New `validateNslookupArgs` requires ≥ 1 arg. Both wired into POSITIVE_ALLOWLIST.
+
+**LOW**
+
+- **F-OP-93 — crontab long-form flags not blocked** — RED pattern `/\bcrontab\b.*-[eru]\b/` matched short flags only. `crontab --edit`, `--remove`, `--user` bypassed it. Fixed: pattern extended to `(-[eru]\b|--edit\b|--remove\b|--user\b)`.
+- **F-OP-94 — systemctl env-manipulation and container-escape sub-commands not blocked** — RED pattern missed `set-environment`, `unset-environment`, `import-environment` (env poisoning), `link` (arbitrary unit file loading), `revert`, `switch-root` (container escape), `freeze`, `thaw`. Added all to RED pattern.
+- **F-OP-95 — atq accepted arbitrary args** — POSITIVE_ALLOWLIST used `allowAny` for `atq`. Replaced with `allowFlags('-V', '--version', '-q')`.
+- **F-OP-96 — AUDIT_LOG_PATH bypass of SENSITIVE_FILE_PATTERNS** — `readAuditLog` reads `CONFIG.AUDIT_LOG_PATH` directly, bypassing the standard `validatePath` gate. If an operator misconfigures `AUDIT_LOG_PATH=/etc/shadow`, the dedicated audit tool would expose it. Fixed: runtime check against `SENSITIVE_FILE_PATTERNS` added at the top of `readAuditLog`.
+- **F-OP-97 — allowlist uses tokenizeCommand inconsistently** — Deferred. Low practical risk; refactor tracked for a future maintenance session.
+
+### Testing
+
+- 552/552 tests pass (56 new tests — one per finding sub-case, verifying both the attack path is blocked and the safe path still works).
+
+---
+
 ## [1.11.0] — 2026-04-25
 
 ### Changed — Command Policy Audit (13 reclassifications)
