@@ -2881,3 +2881,67 @@ export const __TEST_ONLY = {
   SAFE_ENV_KEYS,
   GIT_HARDENING_FLAGS,
 };
+ocess_name as string, parseNum(args.lines, 20));
+      case 'read_file_section':
+        return await readFileSection(args.file_path as string, parseNum(args.start_line, 1), parseNum(args.end_line, 1));
+      case 'search_file':
+        return await searchFile(args.file_path as string, args.pattern as string, parseNum(args.context_lines, 3));
+      case 'git_status':
+        return await gitStatus();
+      case 'git_log':
+        return await gitLog(parseNum(args.count, 10));
+      case 'git_pull':
+        return await gitPull(parseBool(args.dry_run, true), args.directory as string);
+      case 'git_push':
+        return await gitPush(parseBool(args.dry_run, true), (args.description as string) ?? '');
+      case 'restart_process':
+        return await restartProcess(args.process_name as string, parseBool(args.dry_run, true));
+      case 'get_system_health':
+        return await getSystemHealth();
+      case 'run_approved_command':
+        return await runApprovedCommand(args.command as string, args.justification as string, parseBool(args.dry_run, true), parseBool(args.run_in_background, false));
+      case 'get_job_status':
+        return await getJobStatus((args.job_id as string) ?? '');
+      case 'deploy':
+        return await deployApp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
+      case 'deploy_vps_mcp':
+        return await deployVpsMcp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
+      case 'read_audit_log':
+        return await readAuditLog(parseNum(args.lines, 20));
+      case 'get_deploy_status':
+        return await getDeployStatus((args.job_id as string) ?? '');
+      default:
+        return `Unknown tool: "${name}". Available tools: ${TOOLS.map(t => t.name).join(', ')}`;
+    }
+  }
+  catch (err) {
+    const e = err as Error;
+    return `ERROR [${name}]: ${e.message}`;
+  }
+}
+
+// ─── Test-only exports ──────
+export const __TEST_ONLY = {
+  validateCommand,
+  validateAgainstAllowlist,
+  validatePath,
+  validateProcess,
+  checkAmberWarnings,
+  capString,
+  INPUT_LIMITS,
+  BLOCKED_PATTERNS,
+  AMBER_PATTERNS,
+  SENSITIVE_FILE_PATTERNS,
+  CATASTROPHIC_PATTERN_SHAPES,
+  POSITIVE_ALLOWLIST,
+  safeEnv,
+  SAFE_ENV_KEYS,
+  GIT_HARDENING_FLAGS,
+};
+NSITIVE_FILE_PATTERNS,
+  CATASTROPHIC_PATTERN_SHAPES,
+  POSITIVE_ALLOWLIST,
+  safeEnv,
+  SAFE_ENV_KEYS,
+  GIT_HARDENING_FLAGS,
+};

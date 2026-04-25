@@ -360,4 +360,6 @@ The `BYPASS_BINARIES` environment variable (H18) allows administrators to demote
 - The authors and distributors of this software bear no liability for damages resulting from the use or misconfiguration of this feature.
 - You are solely responsible for evaluating whether this feature is appropriate for your environment and risk tolerance.
 
-**This feature is disabled by default. Do not enable it unless you have a speci
+**This feature is disabled by default. Do not enable it unless you have a specific, well-understood operational requirement.**
+
+If you are unsure whether you need this feature, you do not need it.

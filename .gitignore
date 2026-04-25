@@ -22,3 +22,6 @@ src/*_THEIRS.ts
 *.orig.*
 *.rej
 *.swp
+
+# Personal dev config
+.mcp.json

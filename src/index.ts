@@ -116,6 +116,18 @@ const sessions = new Map<string, { server: Server; transport: StreamableHTTPServ
 // instance). Configurable via MAX_SESSIONS env.
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '200', 10);
 
+// ── Startup notice ────────────────────────────────────────────────────────────
+// Delivered once per process lifetime on the first tool call after a restart.
+// Tells the user why they saw a "reconnect" prompt without them having to ask.
+let startupNoticeDelivered = false;
+const STARTUP_NOTICE = [
+  'ℹ️  vps-mcp restarted (this is normal after an update or server reboot).',
+  'If you just saw a "reconnect" prompt — that\'s expected. One click and you\'re back.',
+  'This note only appears once per restart.',
+  '─'.repeat(60),
+  '',
+].join('\n');
+
 function createMcpServer(): Server {
   const server = new Server(
     { name: 'vps-control-mcp', version: '1.1.0' },
@@ -127,10 +139,13 @@ function createMcpServer(): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
     const isCustom = name === 'run_approved_command';
+    const prependNotice = !startupNoticeDelivered;
+    startupNoticeDelivered = true;
     try {
       const result = await executeTool(name, args as Record<string, unknown>);
       auditLog(name, args as Record<string, unknown>, result.length, isCustom);
-      return { content: [{ type: 'text', text: result }] };
+      const text = prependNotice ? STARTUP_NOTICE + result : result;
+      return { content: [{ type: 'text', text }] };
     } catch (err) {
       auditLog(name, args as Record<string, unknown>, 0, isCustom);
       throw err;
