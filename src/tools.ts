@@ -1991,31 +1991,57 @@ async function getPm2Status(): Promise<string> {
   return JSON.stringify(rows, null, 2);
 }
 
+// Locate the most-recently-modified PM2 log file for a process.
+// PM2 names logs {name}-{type}.log (fork, explicit out_file) or
+// {name}-{type}-{id}.log (cluster/implicit). We accept both by scanning
+// PM2_LOG_DIR for any file starting with "{processName}-{type}" and ending
+// in ".log", then picking the one most recently written to.
+// All candidate paths are bounds-checked against PM2_LOG_DIR before use.
+function findPm2Log(processName: string, type: 'out' | 'error'): string | null {
+  const resolvedLogDir = path.resolve(CONFIG.PM2_LOG_DIR);
+  const prefix = `${processName}-${type}`;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resolvedLogDir);
+  } catch {
+    return null;
+  }
+
+  const candidates = entries
+    .filter(f => f.startsWith(prefix) && f.endsWith('.log'))
+    .map(f => path.join(resolvedLogDir, f))
+    // Bounds check: every candidate must resolve inside PM2_LOG_DIR
+    .filter(p => {
+      const resolved = path.resolve(p);
+      return resolved !== resolvedLogDir &&
+             resolved.startsWith(resolvedLogDir + path.sep);
+    });
+
+  if (candidates.length === 0) return null;
+
+  // Sort by mtime descending — pick the file most recently written to
+  candidates.sort((a, b) => {
+    try { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; }
+    catch { return 0; }
+  });
+  return candidates[0];
+}
+
 async function getRecentErrors(processName: string, lines: number): Promise<string> {
   validateProcess(processName);
   const cappedLines = Math.min(Math.max(1, lines), CONFIG.MAX_LOG_LINES);
-  const logPath = path.join(CONFIG.PM2_LOG_DIR, `${processName}-error.log`);
-
-  // Early-return on missing log BEFORE validatePath, since validatePath's
-  // realpathSync throws ENOENT on nonexistent files — a process that hasn't
-  // produced errors yet is a legitimate state, not an error.
-  if (!fs.existsSync(logPath)) {
-    return `No error log at ${logPath}. The process may not have produced errors yet, or the log path differs on this system.`;
-  }
 
   // The path is fully controlled: CONFIG.PM2_LOG_DIR is operator-set and
   // processName is validated against ALLOWED_PROCESSES above. We do NOT route
   // through validatePath here because APP_DIR_ROOT_CARVEOUT (which blocks
   // /root/* outside APP_DIR) would incorrectly block /root/.pm2/logs/ — a
-  // legitimate, operator-configured read-only target. Instead, confirm the
-  // resolved path is rooted inside PM2_LOG_DIR as a targeted bounds check.
-  const resolvedLogPath = path.resolve(logPath);
-  const resolvedLogDir  = path.resolve(CONFIG.PM2_LOG_DIR);
-  if (resolvedLogPath !== resolvedLogDir &&
-      !resolvedLogPath.startsWith(resolvedLogDir + path.sep)) {
-    throw new Error('Log path outside PM2_LOG_DIR — internal configuration error.');
+  // legitimate, operator-configured read-only target. findPm2Log performs the
+  // targeted PM2_LOG_DIR bounds check in place of validatePath.
+  const safeLogPath = findPm2Log(processName, 'error');
+  if (!safeLogPath) {
+    return `No error log found for "${processName}" in ${CONFIG.PM2_LOG_DIR}. The process may not have produced errors yet.`;
   }
-  const safeLogPath = resolvedLogPath;
 
   const { stdout } = await exec('tail', ['-n', String(cappedLines), safeLogPath]);
   const result = stdout.trim();
@@ -2025,23 +2051,12 @@ async function getRecentErrors(processName: string, lines: number): Promise<stri
 async function getRecentOutput(processName: string, lines: number): Promise<string> {
   validateProcess(processName);
   const cappedLines = Math.min(Math.max(1, lines), CONFIG.MAX_LOG_LINES);
-  const logPath = path.join(CONFIG.PM2_LOG_DIR, `${processName}-out.log`);
 
-  // Early-return on missing log BEFORE any path check, since realpathSync throws
-  // ENOENT on nonexistent files — a process that hasn't produced stdout yet is fine.
-  if (!fs.existsSync(logPath)) {
-    return `No stdout log at ${logPath}. The process may not have produced output yet, or the log path differs on this system.`;
+  // Same targeted bounds check via findPm2Log — see getRecentErrors comment.
+  const safeLogPath = findPm2Log(processName, 'out');
+  if (!safeLogPath) {
+    return `No stdout log found for "${processName}" in ${CONFIG.PM2_LOG_DIR}. The process may not have produced output yet.`;
   }
-
-  // Same targeted bounds check as getRecentErrors — bypass validatePath because
-  // APP_DIR_ROOT_CARVEOUT would incorrectly block /root/.pm2/logs/.
-  const resolvedLogPath = path.resolve(logPath);
-  const resolvedLogDir  = path.resolve(CONFIG.PM2_LOG_DIR);
-  if (resolvedLogPath !== resolvedLogDir &&
-      !resolvedLogPath.startsWith(resolvedLogDir + path.sep)) {
-    throw new Error('Log path outside PM2_LOG_DIR — internal configuration error.');
-  }
-  const safeLogPath = resolvedLogPath;
 
   const { stdout } = await exec('tail', ['-n', String(cappedLines), safeLogPath]);
   const result = stdout.trim();
