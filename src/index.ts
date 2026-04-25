@@ -867,3 +867,26 @@ const server = app.listen(CONFIG.PORT, () => {
   console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
   console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
 });
+ time to flush.
+// gap will hit the stale-session SSE restore path above.
+
+process.on('SIGTERM', () => {
+  console.log(`[vps-control-mcp] SIGTERM received — ${sessions.size} active session(s). Shutting down.`);
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log(`[vps-control-mcp] SIGINT received — shutting down.`);
+  process.exit(0);
+});
+
+// --- Start -------------------------------------------------------------------
+
+const server = app.listen(CONFIG.PORT, () => {
+  console.log('[vps-control-mcp] Running on port ' + CONFIG.PORT);
+  console.log('[vps-control-mcp] Transport: Streamable HTTP (/mcp)');
+  console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
+  console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
+});
+g('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
+});
