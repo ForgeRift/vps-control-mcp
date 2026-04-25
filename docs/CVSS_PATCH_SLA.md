@@ -23,7 +23,7 @@ The 72-hour clock starts when ForgeRift first becomes aware of the vulnerability
 
 ### Automated
 - **npm audit** — run on every deploy via CI or manually: `npm audit` / `pnpm audit`
-- **GitHub Dependabot** — enabled on both repos (`claudedussy/local-terminal-mcp`, `claudedussy/vps-control-mcp`). Alerts appear in the Security tab and are sent to the repo owner email.
+- **GitHub Dependabot** — enabled on both repos (`ForgeRift/local-terminal-mcp`, `ForgeRift/vps-control-mcp`). Alerts appear in the Security tab and are sent to the repo owner email.
 - **GitHub Advisory Database** — Dependabot pulls from this automatically.
 
 ### Manual checks (run at least monthly)

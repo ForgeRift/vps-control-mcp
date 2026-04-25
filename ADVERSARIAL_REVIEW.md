@@ -150,8 +150,8 @@ The following prompt is formatted for direct use in one coding session covering 
 You are remediating S62 adversarial findings F-OP-62 through F-OP-66 across BOTH `forgerift/local-terminal-mcp` v1.10.0 and `forgerift/vps-control-mcp` v1.10.0 in a single coordinated session. Ship both as v1.10.1 (patch-level — matcher-semantics tightening, no config-surface break). Phase order below is chosen to keep the tree in a coherent state at every phase boundary.
 
 Repos:
-  LT:  C:\Users\ddeni\Desktop\claudedussy\local-terminal-mcp
-  VPS: C:\Users\ddeni\Desktop\claudedussy\vps-control-mcp
+  LT:  C:\Users\ddeni\Desktop\claudedussy\New chat\local-terminal-mcp
+  VPS: C:\Users\ddeni\Desktop\claudedussy\New chat\vps-control-mcp
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PHASE 1 — LT D10 matcher (F-OP-62 CRITICAL, F-OP-63 CRITICAL, F-OP-64 HIGH)
@@ -345,8 +345,8 @@ The following prompt is formatted for direct use in one coding session covering 
 You are remediating S63 adversarial findings F-OP-68, F-OP-69, F-OP-70 across BOTH `forgerift/local-terminal-mcp` v1.10.1 and `forgerift/vps-control-mcp` v1.10.1 in a single coordinated session. Ship both as v1.10.2 (patch-level — matcher-semantics tightening, no config-surface break). Phase order is chosen to keep the tree in a coherent state at every phase boundary.
 
 Repos:
-  LT:  C:\Users\ddeni\Desktop\claudedussy\local-terminal-mcp
-  VPS: C:\Users\ddeni\Desktop\claudedussy\vps-control-mcp
+  LT:  C:\Users\ddeni\Desktop\claudedussy\New chat\local-terminal-mcp
+  VPS: C:\Users\ddeni\Desktop\claudedussy\New chat\vps-control-mcp
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PHASE 1 — LT D10 NIX-path regression (F-OP-68 CRITICAL)
