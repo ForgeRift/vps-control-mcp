@@ -29,12 +29,13 @@ Every command passes through a three-tier security model with 275+ hard-blocked 
 
 ![Deploy pipeline demo](https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/docs/media/vps-control_03_deploy.gif)
 
-Sixteen tools across multiple categories:
+Seventeen tools across multiple categories:
 
 **Read-only operational**
 - `get_pm2_status` — PM2 process list with status, restarts, memory, CPU, uptime
 - `get_system_health` — disk usage, memory, uptime
 - `get_recent_errors` — error-log tail for a named PM2 process
+- `get_recent_output` — stdout-log tail for a named PM2 process
 - `read_audit_log` — read the immutable audit trail of all tool calls
 - `git_status`, `git_log` — repo state in the deploy dir
 - `read_file_section`, `search_file` — read files in allowed directories
@@ -92,6 +93,8 @@ All settings live in `.env` (auto-generated):
 | `RATE_LIMIT_PER_MIN` | `60` | Max requests per minute |
 | `ANTHROPIC_API_KEY` | unset | Enables Layer 2/3 AI classifier review (optional, falls open if unset) |
 | `BYPASS_BINARIES` | empty | Advanced: `<binary>:<category>,...` demotion list |
+| `ALLOWED_PROCESSES` | `vps-mcp` | Comma-separated PM2 process names whose logs `get_recent_errors` and `get_recent_output` are permitted to read |
+| `MAX_LOG_LINES` | `50` | Lines returned per call by `get_recent_errors` and `get_recent_output` |
 
 ![RED-tier block demo](https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/docs/media/vps-control_04_red-block.gif)
 

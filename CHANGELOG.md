@@ -4,6 +4,48 @@ All notable changes to vps-control-mcp.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-04-25
+
+### Changed — Command Policy Audit (13 reclassifications)
+
+- **`systemctl` unblocked** — Blanket `systemctl` RED block replaced with arg-validator gating. Read-only sub-commands (`status`, `is-active`, `is-enabled`, `is-failed`, `list-units`, `list-unit-files`, `list-sockets`, `list-timers`, `show`, `cat`, `help`) are now GREEN. Destructive sub-commands (`start`, `stop`, `restart`, `reload`, `enable`, `disable`, `mask`, `unmask`, `daemon-reload`, `poweroff`, `reboot`, etc.) remain hard-blocked by both targeted RED patterns and the arg validator (defense-in-depth).
+- **`service` unblocked** — Blanket `service` RED block replaced with arg-validator gating. Only `service <name> status` is permitted. Write sub-commands (`start`, `stop`, `restart`, `reload`, `enable`, `disable`) remain hard-blocked at both layers.
+- **`crontab -l` unblocked** — Blanket `crontab` RED block replaced with targeted pattern blocking only `-e`/`-r`/`-u`. `crontab -l` (list) is now GREEN. Modification flags remain hard-blocked at both layers.
+- **`dig`, `nslookup`, `host` unblocked** — Removed from RED-tier info-leak category. DNS lookups are routine diagnostics. `dig -f` (batch file) and `dig -b` (source bind) blocked by arg validator.
+- **`atq` added** — New GREEN command for listing scheduled at-jobs (read-only).
+- **`pm2 save` added to read-only set** — Persists current process list to disk; non-destructive. Previously required manual VPS access.
+- **`pm2 reload` added to read-only set + AMBER warning** — Graceful zero-downtime reload. Marked AMBER (warning required) because cluster vs. fork mode behavior differs. Dangerous PM2 sub-commands (`delete`, `kill`, `start`, `stop`, `flush`) remain blocked.
+
+### Added
+
+- **`COMMAND_POLICY.md`** — Full transparency reference: every GREEN, AMBER, and RED command enumerated with category, rationale, and what Claude uses instead. Includes per-binary sub-command tables for `pm2`, `systemctl`, `service`, `crontab`, `dig`, and `git`.
+
+### Testing
+
+- 496/496 tests pass (20 new tests covering new GREEN commands and confirming dangerous sub-commands blocked at arg-validator layer).
+
+---
+
+## [1.10.8] — 2026-04-25
+
+### Added
+
+- **`get_recent_output` tool** — New monitoring tool mirroring `get_recent_errors` but for PM2 stdout logs (`-out-*.log`). Gated by `ALLOWED_PROCESSES` env var. Returns last N lines (configurable via `MAX_LOG_LINES`). Tool count is now 17.
+- **`ALLOWED_PROCESSES` env var** — Comma-separated list of PM2 process names whose logs `get_recent_errors` and `get_recent_output` are permitted to read. Defaults to `vps-mcp`. Multi-process example: `ALLOWED_PROCESSES=vps-mcp,forgerift-payments`.
+- **`findPm2Log()` helper** — Scans `PM2_LOG_DIR` for files matching `{processName}-{type}*.log` pattern. Handles PM2's ID-suffix naming (e.g. `forgerift-payments-out-5.log`) which breaks explicit `out_file` config. Previously log reads were silently failing; now they work regardless of PM2 suffix behavior.
+
+### Fixed
+
+- **`getRecentErrors` log discovery** — Rewired to use `findPm2Log` instead of hardcoded filename. Fixes silent failures when PM2 appends an ID suffix to log filenames.
+
+### Changed
+
+- **Startup notice** — On the first tool call after each vps-mcp restart, a one-time banner is prepended explaining the restart was expected and providing reconnect instructions. Subsequent calls within the same process lifetime are silent.
+
+### Documentation
+
+- **`TROUBLESHOOTING.md`** — "Click to Reconnect" section added at top. Explains why the Cowork reconnect prompt appears, what to click, how often it occurs, and what not to do.
+
 ---
 
 ## [1.10.7] — 2026-04-24

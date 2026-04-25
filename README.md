@@ -1,6 +1,6 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.10.7-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.11.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
@@ -10,7 +10,7 @@ Give Claude direct, audited control over your Linux VPS. Deploy applications, mo
 
 ## What It Does
 
-vps-control-mcp is a production-grade MCP server that exposes 16 structured tools for VPS management. Claude can:
+vps-control-mcp is a production-grade MCP server that exposes **17** structured tools for VPS management. Claude can:
 
 - **Deploy applications** via PM2 with automatic rollback on build failure
 - **Monitor processes** and tail error logs in real-time  
@@ -90,7 +90,7 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
-| `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors |
+| `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors and get_recent_output |
 | `MAX_OUTPUT_CHARS` | 3000 | Max characters in command output |
 | `MAX_FILE_LINES` | 100 | Max lines when reading files |
 | `RATE_LIMIT_PER_MIN` | 60 | Requests per minute per token |
@@ -100,10 +100,11 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 
 ## Available Tools
 
-### Monitoring (4 tools)
+### Monitoring (5 tools)
 
 - `get_pm2_status` — View all running processes with memory/CPU/uptime
 - `get_recent_errors` — Tail error logs for a specific PM2 process
+- `get_recent_output` — Tail stdout logs for a specific PM2 process
 - `get_system_health` — Disk usage, memory, and uptime
 - `read_audit_log` — Read the immutable audit trail of all tool calls
 

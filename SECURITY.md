@@ -90,6 +90,8 @@ Any command that attempts privilege escalation is blocked: `sudo` without passwo
 
 Commands that enumerate sensitive system information are blocked: `cat /etc/shadow`, `getent shadow`, `/proc/[pid]/environ` reading, `/proc/[pid]/fd` enumeration, and other kernel interface exploration. System diagnostics are available only through structured APIs.
 
+**Process Log Access Gating** — `get_recent_errors` and `get_recent_output` (the structured tools for tailing PM2 error and stdout logs) are gated by the `ALLOWED_PROCESSES` environment variable. Only PM2 process names explicitly listed in `ALLOWED_PROCESSES` (comma-separated; default: `vps-mcp`) can have their logs read. This prevents a compromised Claude session from reading logs of arbitrary processes not under its operational scope.
+
 **Command Chaining Exploits**
 
 Advanced command chaining patterns are blocked: semicolon chaining in contexts where it can circumvent parsing (`; rm -rf /`), command substitution in critical contexts, and pipe-to-shell patterns. These are detected at the parser level before execution.
@@ -173,6 +175,8 @@ The same sensitive-prefix list applies to shell-redirect destinations (`>`, `>>`
 **Known pre-v1.10.3 bypass scope:** operators running v1.10.0–v1.10.2 of VPS could not rely on destination-side `/home` write protection via the synchronous layer; the tier-3 AI review would still flag `authorized_keys` as high-risk but AI layers fail open when `ANTHROPIC_API_KEY` is unset. Upgrading to v1.10.3 closes this gap.
 
 **Known pre-v1.10.4 bypass scope:** v1.10.3 relied on `.gitignore`-only patterns to prevent re-introduction of merge-conflict and backup artifacts. A developer using `git add -f` or a file name outside the declared shapes (e.g. `tools_LOCAL.ts`, `foo.ts.orig.1`) could land artifacts through the normal commit flow with no defense. v1.10.4 adds `.githooks/pre-commit` that refuses the commit outright, with `package.json` `prepare` script wiring `core.hooksPath` to `.githooks` automatically on `npm install`. The guard is defense-in-depth; no credential or command-surface security gap is affected by the pre-v1.10.4 state.
+| v1.10.8 | — | `get_recent_output` tool (stdout log tail); `findPm2Log()` helper fixes log-file discovery when PM2 appends ID suffixes; `ALLOWED_PROCESSES` env var gates which PM2 processes log tools can read; startup notice on first tool call post-restart |
+| v1.11.0 | — | Command policy audit: 13 command reclassifications (systemctl read-only, service status, crontab -l, dig, nslookup, host unblocked; pm2 save + reload added to read-only set); `COMMAND_POLICY.md` published — full GREEN/AMBER/RED transparency reference |
 
 ## Session-Level Security Controls
 
