@@ -27,6 +27,9 @@ These are safe, read-only, or low-risk operations that don't require AI safety r
 | Inspect git state | `What's the git status of my app?` `Show me recent commits` |
 | View network connections | `What ports are open on this server?` |
 | View the audit log | `Show me what commands were run today` |
+| Check service status | `Is nginx running?` `systemctl status nginx` `service nginx status` |
+| DNS lookups | `What does dig forgerift.io return?` `nslookup example.com` |
+| List cron jobs | `What cron jobs are scheduled?` `crontab -l` |
 | Search files | `Find all .env files on this server` |
 | Check cron jobs (read-only) | `What cron jobs are scheduled?` |
 | View error logs | `Any errors in the last hour?` |
@@ -387,4 +390,4 @@ The RED-tier blocks still apply regardless of the token. But someone with your t
 
 ---
 
-*For setup instructions, see [GETTING_STARTED.md](GETTING_STARTED.md). For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).*
+*For setup instructions, see [GETTING_STARTED.md](GETTING_STARTED.md). For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md). For the complete per-command GREEN/AMBER/RED classification reference, see [COMMAND_POLICY.md](COMMAND_POLICY.md).*
