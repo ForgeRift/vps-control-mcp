@@ -104,7 +104,7 @@ const eventStore = new InMemoryEventStore();
 
 // --- MCP Server + Transport management ----------------------------------------
 // Each session gets its own Server + Transport pair.
-// StreamableHTTP handles reconnection natively — the client POSTs each message
+// StreamableHTTP handles reconnection natively ΓÇö the client POSTs each message
 // independently and can GET to open SSE streams. If a stream drops, the client
 // reconnects with Last-Event-ID and missed events are replayed.
 
@@ -115,18 +115,18 @@ const sessions = new Map<string, { server: Server; transport: StreamableHTTPServ
 // 200 is well above realistic demand (one session per Claude desktop / Cowork
 // instance). Configurable via MAX_SESSIONS env.
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '200', 10);
-
-// ── Startup notice ────────────────────────────────────────────────────────────
+// -- Startup notice -----------------------------------------------------------
 // Delivered once per process lifetime on the first tool call after a restart.
 // Tells the user why they saw a "reconnect" prompt without them having to ask.
 let startupNoticeDelivered = false;
 const STARTUP_NOTICE = [
-  'ℹ️  vps-mcp restarted (this is normal after an update or server reboot).',
-  'If you just saw a "reconnect" prompt — that\'s expected. One click and you\'re back.',
+  'vps-mcp restarted (normal after an update or server reboot).',
+  'If you just saw a "reconnect" prompt -- that is expected. One click and you are back.',
   'This note only appears once per restart.',
-  '─'.repeat(60),
+  '-'.repeat(60),
   '',
 ].join('\n');
+
 
 function createMcpServer(): Server {
   const server = new Server(
@@ -163,15 +163,15 @@ const app = express();
 // runs on 127.0.0.1 and is instructed to OVERWRITE X-Forwarded-For with $remote_addr
 // (not the default $proxy_add_x_forwarded_for which appends the client's forged value).
 // With trust-proxy = 'loopback', Express populates req.ip from the last hop in the
-// XFF chain that came from a trusted IP — which is the nginx-supplied real client IP.
+// XFF chain that came from a trusted IP ΓÇö which is the nginx-supplied real client IP.
 // Any XFF header sent by a non-loopback peer is ignored entirely.
 // If the deploy topology changes (nginx moves off-box, or a different proxy is used),
-// update this to the specific IP/CIDR of the front-door — never set it to 'true'
+// update this to the specific IP/CIDR of the front-door ΓÇö never set it to 'true'
 // (which trusts all hops) or to a large CIDR that includes client networks.
 app.set('trust proxy', 'loopback');
 
 // --- CORS (browser-based MCP clients need this) ------------------------------
-// F-OP-14: Reflect origin only if it is in ALLOWED_REDIRECT_HOSTS — eliminates the
+// F-OP-14: Reflect origin only if it is in ALLOWED_REDIRECT_HOSTS ΓÇö eliminates the
 // "any origin can make authenticated requests" gap from CORS: *.
 // Non-allowlisted origins get no Access-Control-Allow-Origin header, so browsers
 // block the preflight and the authenticated request never reaches the server.
@@ -186,7 +186,7 @@ app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
       }
-    } catch { /* malformed Origin header — omit CORS header entirely */ }
+    } catch { /* malformed Origin header ΓÇö omit CORS header entirely */ }
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version');
@@ -283,7 +283,7 @@ async function requireAuth(
   }
 
   if (!(await validateAuth(req))) {
-    // F-OP-36: circuit-open + Supabase mode → 503 (not 401) so legitimate callers
+    // F-OP-36: circuit-open + Supabase mode ΓåÆ 503 (not 401) so legitimate callers
     // can distinguish "backend overloaded, retry" from "your token is invalid".
     const supabaseMode = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
     if (supabaseMode && supabaseCircuitOpen()) {
@@ -338,7 +338,7 @@ app.get('/.well-known/oauth-protected-resource', (_req, res) => {
   });
 });
 
-// Path-specific variant — some clients check /.well-known/oauth-protected-resource/{path}
+// Path-specific variant ΓÇö some clients check /.well-known/oauth-protected-resource/{path}
 app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
   const baseUrl = process.env.PUBLIC_URL || `http://localhost:${CONFIG.PORT}`;
   res.json({
@@ -404,7 +404,7 @@ interface AuthCodeEntry {
   timer:                ReturnType<typeof setTimeout>; // F-OP-25: stored so we can clearTimeout on any removal path
 }
 // F-OP-22: hard cap on authCodes Map to prevent unauth memory DoS.
-// /authorize is unauthenticated — an attacker can flood it with large code_challenge
+// /authorize is unauthenticated ΓÇö an attacker can flood it with large code_challenge
 // values. Without a cap, each entry + 5-min timer accumulates unbounded until OOM.
 const AUTH_CODES_MAX = 1000;
 const authCodes = new Map<string, AuthCodeEntry>();
@@ -417,7 +417,7 @@ interface RefreshTokenEntry {
 const refreshTokens = new Map<string, RefreshTokenEntry>();
 const REFRESH_TOKENS_MAX = 500; // cap against crash-loop seeding unbounded timers
 
-// F-OP-22/25: helper — insert with FIFO eviction + clearTimeout on displaced entry.
+// F-OP-22/25: helper ΓÇö insert with FIFO eviction + clearTimeout on displaced entry.
 function insertAuthCode(code: string, entry: AuthCodeEntry): void {
   if (authCodes.size >= AUTH_CODES_MAX) {
     const oldest = authCodes.entries().next().value as [string, AuthCodeEntry] | undefined;
@@ -468,7 +468,7 @@ const loopbackHosts = (process.env.ALLOW_LOOPBACK_REDIRECTS || '').toLowerCase()
 const ALLOWED_REDIRECT_HOSTS = new Set([...DEFAULT_REDIRECT_HOSTS, ...customHosts, ...loopbackHosts]);
 
 if (loopbackHosts.length > 0) {
-  console.warn('[vps-control-mcp] ⚠️  ALLOW_LOOPBACK_REDIRECTS=true — localhost/127.0.0.1 accepted as OAuth redirect_uri. Do not use in production.');
+  console.warn('[vps-control-mcp] ΓÜá∩╕Å  ALLOW_LOOPBACK_REDIRECTS=true ΓÇö localhost/127.0.0.1 accepted as OAuth redirect_uri. Do not use in production.');
 }
 
 function isRedirectAllowed(uri: string): boolean {
@@ -480,7 +480,7 @@ function isRedirectAllowed(uri: string): boolean {
   }
 }
 
-// Step 1: Cowork opens this in a browser — auto-redirect with code
+// Step 1: Cowork opens this in a browser ΓÇö auto-redirect with code
 app.get('/authorize', (req, res) => {
   const {
     redirect_uri = '',
@@ -506,13 +506,13 @@ app.get('/authorize', (req, res) => {
   }
 
   // F-OP-35 + F-NEW-6 + F-OP-26: PKCE MANDATORY at /authorize.
-  // v1.7.0 only enforced PKCE when code_challenge_method was present — omitting
+  // v1.7.0 only enforced PKCE when code_challenge_method was present ΓÇö omitting
   // the param skipped the block entirely and let an attacker exchange the code
   // for the root MCP_AUTH_TOKEN unauthenticated. PKCE is now unconditional:
   // every code must carry a valid code_challenge. /token refuses any code whose
   // stored entry lacks codeChallenge.
   if (!code_challenge || !/^[A-Za-z0-9_\-.~]{43,128}$/.test(code_challenge)) {
-    res.status(400).send('PKCE required: code_challenge (43–128 URL-safe chars) is mandatory.');
+    res.status(400).send('PKCE required: code_challenge (43ΓÇô128 URL-safe chars) is mandatory.');
     return;
   }
   if (code_challenge_method && code_challenge_method !== 'S256') {
@@ -530,7 +530,7 @@ app.get('/authorize', (req, res) => {
     codeChallenge: code_challenge,
     codeChallengeMethod: 'S256',
   };
-  // F-OP-22: use helper — FIFO-evicts oldest entry (with clearTimeout) when at cap.
+  // F-OP-22: use helper ΓÇö FIFO-evicts oldest entry (with clearTimeout) when at cap.
   insertAuthCode(code, entry);
 
   const url = new URL(redirect_uri);
@@ -562,7 +562,7 @@ app.post('/token', (req, res) => {
     // setTimeout max is ~24.8 days (2^31-1 ms). Use 24 days; tokens also checked at use time.
     // F-OP-25: store handle so FIFO eviction and early rotation can clearTimeout.
     const refreshTimer = setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
-    // F-OP-22/25: use helper — FIFO-evicts oldest (with clearTimeout) when at cap.
+    // F-OP-22/25: use helper ΓÇö FIFO-evicts oldest (with clearTimeout) when at cap.
     insertRefreshToken(newRefresh, { accessToken: entry.accessToken, issuedAt: Date.now(), timer: refreshTimer });
     // F-OP-35: re-register the session token in the auth-side store to extend its TTL
     // through this refresh window. Without this, the access_token would expire from the
@@ -579,7 +579,7 @@ app.post('/token', (req, res) => {
   }
 
   // --- Authorization code grant (default) ---
-  // F-OP-11: Atomic get-and-delete — Map.delete() returns false if the key was already absent.
+  // F-OP-11: Atomic get-and-delete ΓÇö Map.delete() returns false if the key was already absent.
   // Two parallel requests with the same code both pass a has() check but only one wins
   // the delete(); the loser gets invalid_grant. Prevents refresh-token duplication.
   const codeEntry = code ? authCodes.get(code) : undefined;
@@ -588,16 +588,16 @@ app.post('/token', (req, res) => {
     return;
   }
   if (!authCodes.delete(code)) {
-    // Lost the race — another concurrent request already consumed this code.
+    // Lost the race ΓÇö another concurrent request already consumed this code.
     res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code already used.' });
     return;
   }
-  // F-OP-25: cancel the 5-min expiry timer now that the code is consumed — prevents
+  // F-OP-25: cancel the 5-min expiry timer now that the code is consumed ΓÇö prevents
   // the stale delete from firing and avoids the timer leaking in the event loop.
   clearTimeout(codeEntry.timer);
 
   // F-OP-35: every authorize code now carries a PKCE binding (mandatory upstream).
-  // Refuse any code whose entry lacks codeChallenge — this is a defence in depth
+  // Refuse any code whose entry lacks codeChallenge ΓÇö this is a defence in depth
   // against an entry being corrupted or injected out-of-band.
   if (!codeEntry.codeChallenge) {
     res.status(400).json({ error: 'invalid_grant', error_description: 'No PKCE binding on this code.' });
@@ -614,7 +614,7 @@ app.post('/token', (req, res) => {
     return;
   }
 
-  // F-OP-35: mint a per-session crypto-random access token — decoupled from
+  // F-OP-35: mint a per-session crypto-random access token ΓÇö decoupled from
   // process.env.MCP_AUTH_TOKEN. Any future auth-flow flaw can only ever leak a
   // session-bound token with known TTL, never the master root credential.
   const accessToken = crypto.randomBytes(32).toString('base64url');
@@ -623,7 +623,7 @@ app.post('/token', (req, res) => {
   // F-OP-25: store timer handle so FIFO eviction and early rotation can clearTimeout.
   const newRefresh = crypto.randomBytes(32).toString('base64url');
   const newRefreshTimer = setTimeout(() => refreshTokens.delete(newRefresh), 24 * 24 * 3600 * 1000);
-  // F-OP-22/25: use helper — FIFO-evicts oldest (with clearTimeout) when at cap.
+  // F-OP-22/25: use helper ΓÇö FIFO-evicts oldest (with clearTimeout) when at cap.
   insertRefreshToken(newRefresh, { accessToken, issuedAt: Date.now(), timer: newRefreshTimer });
 
   res.json({
@@ -650,12 +650,12 @@ app.all('/mcp', requireAuth, async (req, res) => {
   }
 
   // Stale/unknown session ID handling:
-  // - GET (SSE reconnect after server restart): transparently restore — create a fresh
+  // - GET (SSE reconnect after server restart): transparently restore ΓÇö create a fresh
   //   server+transport registered under the original session ID so the client resumes
   //   without noticing the restart. This is the primary auto-reconnect path.
   // - POST initialize: strip the stale ID and fall through to fresh session creation.
-  // - POST non-initialize with stale ID: return 404 — the client must re-initialize.
-  //   Do NOT create a new Server+Transport for non-initialize POSTs — abandoned pairs leak.
+  // - POST non-initialize with stale ID: return 404 ΓÇö the client must re-initialize.
+  //   Do NOT create a new Server+Transport for non-initialize POSTs ΓÇö abandoned pairs leak.
   if (sessionId) {
     const body = req.body as Record<string, unknown>;
     const isInitialize = typeof body?.method === 'string' && body.method === 'initialize';
@@ -664,7 +664,7 @@ app.all('/mcp', requireAuth, async (req, res) => {
       // SSE reconnect with stale session (server restarted). Restore transparently:
       // create a fresh server+transport and register it under the old session ID.
       // Cowork sees the SSE stream reopen and continues without manual intervention.
-      console.log(`[vps-control-mcp] Stale session ${sessionId} on SSE reconnect — restoring transparently`);
+      console.log(`[vps-control-mcp] Stale session ${sessionId} on SSE reconnect ΓÇö restoring transparently`);
       if (sessions.size >= MAX_SESSIONS) {
         res.status(503).setHeader('Retry-After', '30').json({
           jsonrpc: '2.0',
@@ -704,7 +704,7 @@ app.all('/mcp', requireAuth, async (req, res) => {
       // POST initialize with stale session: strip the ID, fall through to fresh creation.
       // The client receives a new session ID in the response header and continues.
       delete req.headers['mcp-session-id'];
-      console.log(`[vps-control-mcp] Stale session ${sessionId} on initialize — re-creating transparently`);
+      console.log(`[vps-control-mcp] Stale session ${sessionId} on initialize ΓÇö re-creating transparently`);
       // Fall through to fresh session creation below
 
     } else {
@@ -718,11 +718,11 @@ app.all('/mcp', requireAuth, async (req, res) => {
     }
   }
 
-  // No session ID (or stale session stripped above) — only allow on POST (initialization)
+  // No session ID (or stale session stripped above) ΓÇö only allow on POST (initialization)
   if (req.method === 'POST') {
     // F-VM-4: refuse to allocate beyond MAX_SESSIONS
     if (sessions.size >= MAX_SESSIONS) {
-      console.warn(`[vps-control-mcp] Session cap reached (${sessions.size}/${MAX_SESSIONS}) — rejecting initialize`);
+      console.warn(`[vps-control-mcp] Session cap reached (${sessions.size}/${MAX_SESSIONS}) ΓÇö rejecting initialize`);
       res.status(503)
         .setHeader('Retry-After', '30')
         .json({
@@ -758,7 +758,7 @@ app.all('/mcp', requireAuth, async (req, res) => {
     return;
   }
 
-  // GET or DELETE without valid session → 400
+  // GET or DELETE without valid session ΓåÆ 400
   res.status(400).json({
     jsonrpc: '2.0',
     error: { code: -32000, message: 'No valid session. Send an initialize POST first.' },
@@ -777,12 +777,12 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-// F-OP-30: read version from package.json at startup — prior passes closed F-OP-15
+// F-OP-30: read version from package.json at startup ΓÇö prior passes closed F-OP-15
 // but the hardcode was never actually removed. Fall back to 'unknown' on parse failure
 // (F-OP-48, seventh pass): an honest signal beats a stale literal that rots on every bump.
 let CURRENT_VERSION = 'unknown';
 try {
-  // dist/index.js → ../package.json (one level up from dist/)
+  // dist/index.js ΓåÆ ../package.json (one level up from dist/)
   const pkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
   if (pkg.version) CURRENT_VERSION = pkg.version;
@@ -790,7 +790,7 @@ try {
 
 app.get('/health', async (req, res) => {
   // F-NEW-15 + F-OP-31: unauthenticated callers get a minimal response only.
-  // uptime_s was removed — it leaks process restart cadence to unauth callers,
+  // uptime_s was removed ΓÇö it leaks process restart cadence to unauth callers,
   // which is useful for timing attacks and restart-loop detection.
   const authenticated = await validateAuth(req);
   if (!authenticated) {
@@ -815,7 +815,7 @@ app.get('/health', async (req, res) => {
         (global as Record<string, unknown>).__versionCache = { version: latestVersion, checkedAt: Date.now() };
       }
     }
-  } catch { /* fail-silent — version check is best-effort */ }
+  } catch { /* fail-silent ΓÇö version check is best-effort */ }
 
   res.json({
     status:          'ok',
@@ -850,12 +850,12 @@ app.get('/health', async (req, res) => {
 // gap will hit the stale-session SSE restore path above.
 
 process.on('SIGTERM', () => {
-  console.log(`[vps-control-mcp] SIGTERM received — ${sessions.size} active session(s). Shutting down.`);
+  console.log(`[vps-control-mcp] SIGTERM received ΓÇö ${sessions.size} active session(s). Shutting down.`);
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  console.log(`[vps-control-mcp] SIGINT received — shutting down.`);
+  console.log(`[vps-control-mcp] SIGINT received ΓÇö shutting down.`);
   process.exit(0);
 });
 
@@ -866,27 +866,4 @@ const server = app.listen(CONFIG.PORT, () => {
   console.log('[vps-control-mcp] Transport: Streamable HTTP (/mcp)');
   console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
   console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
-});
- time to flush.
-// gap will hit the stale-session SSE restore path above.
-
-process.on('SIGTERM', () => {
-  console.log(`[vps-control-mcp] SIGTERM received — ${sessions.size} active session(s). Shutting down.`);
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log(`[vps-control-mcp] SIGINT received — shutting down.`);
-  process.exit(0);
-});
-
-// --- Start -------------------------------------------------------------------
-
-const server = app.listen(CONFIG.PORT, () => {
-  console.log('[vps-control-mcp] Running on port ' + CONFIG.PORT);
-  console.log('[vps-control-mcp] Transport: Streamable HTTP (/mcp)');
-  console.log('[vps-control-mcp] App dir: '        + CONFIG.APP_DIR);
-  console.log('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
-});
-g('[vps-control-mcp] Audit log: '      + CONFIG.AUDIT_LOG_PATH);
 });
