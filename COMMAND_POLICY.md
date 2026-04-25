@@ -121,10 +121,9 @@ PM2 is the process manager running your applications. Access is split between re
 | `pm2 monit` | Real-time monitoring (non-interactive; returns a snapshot). |
 | `pm2 id <name>` | Process ID lookup. |
 | `pm2 version`, `pm2 --version`, `pm2 -v` | Version check. |
-| `pm2 flush` | Clear all log files. |
 | **`pm2 save`** | **Proposed: move to GREEN.** Persists the current process list to disk so it survives reboots. Write op but bounded risk — worst case is persisting a temporarily bad process state, which is recoverable. Currently blocked; requires SSH paste. |
 | **`pm2 startup show`** | **Proposed: move to GREEN.** Prints the startup script command without executing it. Pure read. |
-| **`pm2 reload <name>`** | **Proposed: move to AMBER.** Graceful reload (zero-downtime for cluster mode). Less disruptive than restart. |
+
 
 ### RED — Blocked (env-leak risk)
 These sub-commands print the full process environment, which includes `MCP_AUTH_TOKEN`, `SUPABASE_SERVICE_KEY`, and other secrets. Use the `get_pm2_status` structured tool instead — it returns a scrubbed view.
@@ -146,6 +145,8 @@ These are handled by the `restart_process` structured tool, which applies rate l
 | `pm2 stop` | Use `restart_process` tool. |
 | `pm2 restart` | Use `restart_process` tool. |
 | `pm2 delete` | Use `restart_process` tool. |
+| `pm2 flush` | Destroys all PM2 log evidence. Classified as `audit-log-destruction` (F-OP-90). |
+| `pm2 reload` | Triggers live process restart (lifecycle-affecting). Use `restart_process` tool (F-OP-89). |
 | `pm2 kill` | Kills the PM2 daemon. Hard-blocked. |
 
 ---
@@ -493,21 +494,35 @@ Even within allowed directories, these file patterns are blocked:
 
 The following changes are proposed for v1.11.0 to reduce friction for legitimate admin operations:
 
-| Change | Current | Proposed | Rationale |
-|--------|---------|----------|-----------|
-| `pm2 save` | RED | GREEN | Persists process list. Bounded, recoverable risk. Comes up every time a new process is added. |
-| `pm2 startup show` | RED | GREEN | Prints startup command, doesn't execute. Pure read. |
-| `pm2 reload <name>` | RED | AMBER | Graceful reload. Less disruptive than restart. |
-| `systemctl status <name>` | RED | GREEN | Read-only. Essential for service health checks. |
-| `systemctl is-active <name>` | RED | GREEN | Read-only. |
-| `systemctl is-enabled <name>` | RED | GREEN | Read-only. |
-| `systemctl list-units --no-pager` | RED | GREEN | Read-only listing. |
-| `service <name> status` | RED | GREEN | Read-only. Equivalent to systemctl status. |
-| `crontab -l` | RED | GREEN | Lists cron jobs. Read-only. No creation/deletion. |
-| `atq` | RED | GREEN | Lists scheduled `at` jobs. Read-only. |
-| `dig <domain>` | RED | GREEN | DNS lookup. No secrets exposed. Standard observability. |
+**v1.11.0 — applied:**
+
+| Change | Was | Now | Rationale |
+|--------|-----|-----|-----------|
+| `pm2 save` | RED | GREEN | Persists process list. Bounded, recoverable. |
+| `pm2 startup show` | RED | GREEN | Prints startup command, doesn't execute. |
+| `pm2 reload <name>` | RED | AMBER | Graceful reload — see v1.12.0 reversal below. |
+| `systemctl status/is-active/is-enabled/is-failed/list-units/list-unit-files/list-sockets/list-timers/help` | RED | GREEN | Read-only sub-commands. |
+| `service <name> status` | RED | GREEN | Read-only. |
+| `crontab -l` | RED | GREEN | Read-only list. |
+| `atq` | RED | GREEN | Read-only list. |
+| `dig <domain>` | RED | GREEN | DNS lookup. |
 | `nslookup <domain>` | RED | GREEN | DNS lookup. |
 | `host <domain>` | RED | GREEN | DNS lookup. |
+
+**v1.12.0 — security corrections (Round 13 adversarial review):**
+
+| Change | Was | Now | Finding |
+|--------|-----|-----|---------|
+| `pm2 flush` | GREEN | RED | F-OP-90: destroys all log evidence (`audit-log-destruction`) |
+| `pm2 reload` | AMBER | RED | F-OP-89: lifecycle-affecting — use `restart_process` tool |
+| `systemctl show/cat` | GREEN | RED | F-OP-87: dumps full unit env (may contain secrets) |
+| `systemctl -H/-M` | unblocked | RED | F-OP-86: SSH pivot to remote hosts |
+| Bare `crontab` | GREEN | RED | F-OP-88: drops into interactive editor |
+| `dig @resolver` | GREEN | RED | F-OP-92: custom resolver pivot |
+| `dig AXFR/IXFR` | GREEN | RED | F-OP-92: zone transfer = hostname enumeration |
+| `host -l` | GREEN | RED | F-OP-92: zone transfer |
+| Bare `nslookup` | GREEN | RED | F-OP-92: drops into interactive mode |
+| `atq` | `allowAny` | `allowFlags(-V,--version,-q)` | F-OP-95: restrict flag surface |
 | `journalctl -u <unit> -n 100` | RED | AMBER | System logs with unit filter. May expose secrets logged by services; user must confirm. |
 | `dmesg --level=err` | RED | AMBER | Kernel error log. Rarely contains app secrets. |
 

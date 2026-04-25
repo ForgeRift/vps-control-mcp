@@ -1,6 +1,6 @@
 # vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.11.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.12.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
