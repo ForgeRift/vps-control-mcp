@@ -499,6 +499,30 @@ describe('validateAgainstAllowlist — default-deny', () => {
   it('ss -tulpn passes', () => expectAllowlisted('ss -tulpn'));
   it('du -sh /root/myapp passes', () => expectAllowlisted('du -sh /tmp/testapp'));
 
+  // ── S64 v1.11.0 — new GREEN commands (––––––––––––––––––––––––––––––––––––––––––––––––
+  it('pm2 save passes', () => expectAllowlisted('pm2 save'));
+  it('pm2 startup show passes', () => expectAllowlisted('pm2 startup show'));
+  it('systemctl status nginx passes', () => expectAllowlisted('systemctl status nginx'));
+  it('systemctl is-active nginx passes', () => expectAllowlisted('systemctl is-active nginx'));
+  it('systemctl is-enabled nginx passes', () => expectAllowlisted('systemctl is-enabled nginx'));
+  it('systemctl list-units passes', () => expectAllowlisted('systemctl list-units'));
+  it('service nginx status passes', () => expectAllowlisted('service nginx status'));
+  it('crontab -l passes', () => expectAllowlisted('crontab -l'));
+  it('atq passes', () => expectAllowlisted('atq'));
+  it('dig google.com passes', () => expectAllowlisted('dig google.com'));
+  it('nslookup google.com passes', () => expectAllowlisted('nslookup google.com'));
+  it('host google.com passes', () => expectAllowlisted('host google.com'));
+
+  // ── S64 dangerous sub-commands still blocked –––––––––––––––––––––––––––––––––
+  it('systemctl stop is still blocked', () => assert.throws(() => validateAgainstAllowlist('systemctl stop nginx'), /BLOCKED/));
+  it('systemctl start is still blocked', () => assert.throws(() => validateAgainstAllowlist('systemctl start nginx'), /BLOCKED/));
+  it('systemctl enable is still blocked', () => assert.throws(() => validateAgainstAllowlist('systemctl enable nginx'), /BLOCKED/));
+  it('service nginx stop is still blocked', () => assert.throws(() => validateAgainstAllowlist('service nginx stop'), /BLOCKED/));
+  it('crontab -e is still blocked', () => assert.throws(() => validateAgainstAllowlist('crontab -e'), /BLOCKED/));
+  it('crontab -r is still blocked', () => assert.throws(() => validateAgainstAllowlist('crontab -r'), /BLOCKED/));
+  it('pm2 startup (bare) is still blocked', () => assert.throws(() => validateAgainstAllowlist('pm2 startup'), /BLOCKED/));
+  it('pm2 startup generate is still blocked', () => assert.throws(() => validateAgainstAllowlist('pm2 startup generate'), /BLOCKED/));
+
   // ── Non-allowlisted binaries are blocked ─────────────────────────────────
   it('less is not on allowlist', () => expectNotAllowlisted('less /etc/passwd'));
   it('more is not on allowlist', () => expectNotAllowlisted('more /etc/passwd'));

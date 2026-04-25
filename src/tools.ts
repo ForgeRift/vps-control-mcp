@@ -641,12 +641,20 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bip\s+(link|addr|route)\s+(add|del|set)/, category: 'network-config', reason: 'Network config changes are prohibited.' },
 
   // --- Scheduled execution ---
-  { pattern: /\bcrontab\b/,             category: 'scheduled-exec',  reason: 'Cron job modification is prohibited.' },
-  { pattern: /\bat\b\s/,                category: 'scheduled-exec',  reason: 'Scheduled command execution is prohibited.' },
+  // crontab: blanket block replaced (S64 v1.11.0) with targeted pattern covering only
+  // modification flags. "crontab -l" (read-only list) is now GREEN via validateCrontabArgs.
+  { pattern: /\bcrontab\b.*-[eru]\b/,   category: 'scheduled-exec',  reason: 'Crontab modification (-e edit, -r remove, -u user) is prohibited. Only "crontab -l" is permitted.' },
+  { pattern: /\bat\b\s/,                category: 'scheduled-exec',  reason: 'Scheduled command execution is prohibited. Use atq to list existing jobs.' },
 
   // --- Service management ---
-  { pattern: /\bsystemctl\b/,           category: 'service-mgmt',    reason: 'Service management is prohibited. Use restart_process for PM2 processes.' },
-  { pattern: /\bservice\b/,             category: 'service-mgmt',    reason: 'Service management is prohibited.' },
+  // systemctl and service: blanket blocks replaced (S64 v1.11.0) with targeted patterns
+  // that block only dangerous sub-commands. Read-only sub-commands (status, is-active,
+  // is-enabled, list-units, show, cat) are now GREEN via validateSystemctlArgs /
+  // validateServiceArgs in POSITIVE_ALLOWLIST. Defense-in-depth: both layers must pass.
+  { pattern: /\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|daemon-reexec|reset-failed|poweroff|halt|reboot|kexec|suspend|hibernate|hybrid-sleep|kill|edit|set-default|isolate|rescue|emergency)\b/i,
+    category: 'service-mgmt',    reason: 'Destructive systemctl sub-command. Read-only sub-commands (status, is-active, is-enabled, list-units) are permitted.' },
+  { pattern: /\bservice\s+\S+\s+(start|stop|restart|reload|enable|disable)\b/i,
+    category: 'service-mgmt',    reason: 'Destructive service action. Only "service <name> status" is permitted.' },
 
   // --- Code execution bypasses ---
   { pattern: /\bnode\s+(-e\b|--eval\b)/,    category: 'code-exec',  reason: 'Inline code execution is prohibited.' },
@@ -789,10 +797,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bln\s+--symbolic\b/,          category: 'file-write', reason: 'Symlink creation (ln --symbolic long-form) is prohibited.' },
 
   // --- F-NEW-13: DNS and network info tools ------------------------------------
-  { pattern: /\bhost\s/,                     category: 'info-leak',  reason: 'DNS lookup (host) is prohibited.' },
-  { pattern: /\bdig\b/,                      category: 'info-leak',  reason: 'DNS lookup (dig) is prohibited.' },
-  { pattern: /\bnslookup\b/,                 category: 'info-leak',  reason: 'DNS lookup (nslookup) is prohibited.' },
-  { pattern: /\bgetent\b/,                   category: 'info-leak',  reason: 'getent (NSS lookup) is prohibited.' },
+  // dig, nslookup, host: blanket block removed (S64 v1.11.0) — DNS lookups do not expose
+  // server secrets. Now GREEN via POSITIVE_ALLOWLIST with arg validators. getent remains
+  // blocked because 'getent passwd' exposes the full user/account list.
+  { pattern: /\bgetent\b/,                   category: 'info-leak',  reason: 'getent (NSS lookup) is prohibited. getent passwd exposes the full user/account list.' },
 
   // --- F-NEW-18: system log access ---------------------------------------------
   { pattern: /\bjournalctl\b/,               category: 'info-leak',  reason: 'journalctl is prohibited (system log access).' },
@@ -846,6 +854,9 @@ const AMBER_PATTERNS: AmberWarning[] = [
   { pattern: /\bapt-get\s+update\b/,    risk: 'Package index update. Safe but slow — may timeout the SSE connection. Use run_in_background=true.' },
   // NOTE: find -exec, awk, and sed -i have been promoted to RED (F-OP-1/2/3). Removed from AMBER.
   { pattern: /\bxargs\b/,               risk: 'xargs pipes input as arguments to another command. Ensure the target command is safe.' },
+  // pm2 reload: graceful process reload. In fork mode equivalent to restart (brief downtime).
+  // In cluster mode performs zero-downtime rolling reload. Lifecycle-affecting — confirm before running.
+  { pattern: /\bpm2\s+reload\b/,        risk: 'pm2 reload triggers a graceful process reload. In fork mode this causes a brief restart. In cluster mode it is zero-downtime. Use the restart_process tool if the structured lifecycle path is preferred.' },
 ];
 
 function validateCommand(command: string): void {
@@ -1679,9 +1690,24 @@ const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
     'status', 'list', 'ls', 'logs', 'monit',
     'id', 'version', '--version', '-v', 'flush',
+    'save',   // persists current process list to disk — bounded write, fully recoverable
+    'reload', // graceful reload — AMBER warning applied separately via checkAmberWarnings
   ]);
   const sub = args[0];
   if (!sub) return null;
+
+  // pm2 startup: only 'show' subarg is read-only. Bare 'pm2 startup' runs system
+  // startup-hook installation (writes init scripts). 'show' just prints the command
+  // that would be run, without executing it.
+  if (sub === 'startup') {
+    const subarg = args[1];
+    if (subarg !== 'show') {
+      return `pm2 startup without "show" is not permitted (it installs system startup hooks). ` +
+        `Use "pm2 startup show" to print the startup command without executing it.`;
+    }
+    return null;
+  }
+
   if (!READ_ONLY.has(sub)) {
     // Explicitly call out the env-leaking sub-commands with a clear message
     const ENV_LEAKERS = new Set(['jlist', 'prettylist', 'describe', 'info', 'show']);
@@ -1689,7 +1715,7 @@ const validatePm2Args: ArgValidator = (args) => {
       return `pm2 sub-command "${sub}" is not permitted — it prints the full process environment including MCP_AUTH_TOKEN. Use the get_pm2_status tool instead.`;
     }
     return `pm2 sub-command "${sub}" is not permitted. ` +
-      `Allowed read-only sub-commands: ${[...READ_ONLY].join(', ')}. ` +
+      `Allowed sub-commands: ${[...READ_ONLY].join(', ')}, startup show. ` +
       `Use restart_process tool for pm2 restart/start/stop/delete.`;
   }
   return null;
@@ -1858,6 +1884,69 @@ const validateFindArgs: ArgValidator = (args) => {
   return validateArgPath(pathArgs);
 };
 
+// systemctl: read-only sub-commands only (S64 v1.11.0).
+// Destructive ops (start, stop, enable, disable, restart, mask, daemon-reload,
+// poweroff, halt, reboot) are blocked. Additional defence-in-depth from
+// HARD_BLOCKED_PATTERNS entries covering systemctl poweroff/halt/reboot and
+// the systemctl stop/disable auditd pattern.
+const validateSystemctlArgs: ArgValidator = (args) => {
+  const READ_ONLY = new Set([
+    'status', 'is-active', 'is-enabled', 'is-failed',
+    'list-units', 'list-unit-files', 'list-sockets', 'list-timers',
+    'show', 'cat', 'help', '--version', '-v',
+  ]);
+  const sub = args[0];
+  if (!sub) return `systemctl requires a sub-command. Allowed: ${[...READ_ONLY].join(', ')}.`;
+  if (!READ_ONLY.has(sub)) {
+    return `systemctl sub-command "${sub}" is not permitted. ` +
+      `Allowed read-only sub-commands: ${[...READ_ONLY].join(', ')}. ` +
+      `Use restart_process for process lifecycle management.`;
+  }
+  return null;
+};
+
+// service: read-only 'status' only (S64 v1.11.0).
+// service <name> start/stop/restart/reload/enable/disable are blocked.
+const validateServiceArgs: ArgValidator = (args) => {
+  if (args.length < 2) {
+    return `service requires: service <name> status`;
+  }
+  const action = args[args.length - 1];
+  if (action !== 'status') {
+    return `service action "${action}" is not permitted. Only "service <name> status" is allowed. ` +
+      `Use restart_process for lifecycle management.`;
+  }
+  return null;
+};
+
+// crontab: read-only -l (list) only (S64 v1.11.0).
+// -e (edit), -r (remove), -u (user switch) are blocked.
+const validateCrontabArgs: ArgValidator = (args) => {
+  if (args.length === 0 || (args.length === 1 && args[0] === '-l')) return null;
+  const blocked = new Set(['-e', '-r', '-u']);
+  for (const a of args) {
+    if (blocked.has(a)) {
+      return `crontab flag "${a}" is not permitted. Only "crontab -l" (list) is allowed. ` +
+        `Cron job creation and deletion must be done via direct SSH.`;
+    }
+  }
+  if (args[0] !== '-l') {
+    return `crontab "${args[0]}" is not permitted. Only "crontab -l" (list current jobs) is allowed.`;
+  }
+  return null;
+};
+
+// dig: DNS lookup. Block batch file input and bind-interface flags.
+const validateDigArgs: ArgValidator = (args) => {
+  const BLOCKED_FLAGS = new Set(['-f', '-b']);
+  for (const a of args) {
+    if (BLOCKED_FLAGS.has(a)) {
+      return `dig flag "${a}" is not permitted.`;
+    }
+  }
+  return null;
+};
+
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }
 const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── System info (safe read-only) ──────────────────────────────────────────
@@ -1927,6 +2016,20 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'printf':   { description: 'Formatted print',          argValidator: allowAny },
   'which':    { description: 'Find binary path',         argValidator: allowAny },
   'type':     { description: 'Command type',             argValidator: allowAny },
+
+  // ── Service management (read-only sub-commands) — S64 v1.11.0 ────────────
+  'systemctl': { description: 'systemd service status (read-only)', argValidator: validateSystemctlArgs },
+  'service':   { description: 'Service status (read-only)',         argValidator: validateServiceArgs },
+
+  // ── Scheduled job inspection (read-only) — S64 v1.11.0 ──────────────────
+  'crontab':  { description: 'List cron jobs (-l only)',            argValidator: validateCrontabArgs },
+  'atq':      { description: 'List scheduled at-jobs (read-only)', argValidator: allowAny },
+
+  // ── DNS lookups — S64 v1.11.0 ────────────────────────────────────────────
+  // DNS queries do not expose server secrets. Standard observability tools.
+  'dig':      { description: 'DNS lookup',                          argValidator: validateDigArgs },
+  'nslookup': { description: 'DNS lookup',                          argValidator: allowAny },
+  'host':     { description: 'DNS lookup',                          argValidator: allowAny },
 };
 
 function validateAgainstAllowlist(command: string): void {
