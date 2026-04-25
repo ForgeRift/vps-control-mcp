@@ -2022,6 +2022,32 @@ async function getRecentErrors(processName: string, lines: number): Promise<stri
   return truncate(result || `[No content in last ${cappedLines} lines of ${safeLogPath}]`);
 }
 
+async function getRecentOutput(processName: string, lines: number): Promise<string> {
+  validateProcess(processName);
+  const cappedLines = Math.min(Math.max(1, lines), CONFIG.MAX_LOG_LINES);
+  const logPath = path.join(CONFIG.PM2_LOG_DIR, `${processName}-out.log`);
+
+  // Early-return on missing log BEFORE any path check, since realpathSync throws
+  // ENOENT on nonexistent files — a process that hasn't produced stdout yet is fine.
+  if (!fs.existsSync(logPath)) {
+    return `No stdout log at ${logPath}. The process may not have produced output yet, or the log path differs on this system.`;
+  }
+
+  // Same targeted bounds check as getRecentErrors — bypass validatePath because
+  // APP_DIR_ROOT_CARVEOUT would incorrectly block /root/.pm2/logs/.
+  const resolvedLogPath = path.resolve(logPath);
+  const resolvedLogDir  = path.resolve(CONFIG.PM2_LOG_DIR);
+  if (resolvedLogPath !== resolvedLogDir &&
+      !resolvedLogPath.startsWith(resolvedLogDir + path.sep)) {
+    throw new Error('Log path outside PM2_LOG_DIR — internal configuration error.');
+  }
+  const safeLogPath = resolvedLogPath;
+
+  const { stdout } = await exec('tail', ['-n', String(cappedLines), safeLogPath]);
+  const result = stdout.trim();
+  return truncate(result || `[No content in last ${cappedLines} lines of ${safeLogPath}]`);
+}
+
 async function readFileSection(
   filePath: string,
   startLine: number,
@@ -2554,6 +2580,24 @@ export const TOOLS = [
     },
   },
   {
+    name: 'get_recent_output',
+    annotations: { title: 'Get Recent Output', readOnlyHint: true, destructiveHint: false },
+    description: `Read stdout log for a PM2 process. Hard capped at ${CONFIG.MAX_LOG_LINES} lines and ${CONFIG.MAX_OUTPUT_CHARS} chars. Returns standard output (not errors — use get_recent_errors for error logs). USE THIS — never ask the user to \`tail\`, \`less\`, or paste log contents from \`~/.pm2/logs\`; read logs directly through this tool.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        process_name: {
+          type: 'string',
+          description: `Which process to read. Allowed: ${CONFIG.ALLOWED_PROCESSES.join(', ')}`,
+        },
+        lines: {
+          description: `Lines to retrieve. Default 20. Hard max ${CONFIG.MAX_LOG_LINES}.`,
+        },
+      },
+      required: ['process_name'],
+    },
+  },
+  {
     name: 'read_file_section',
     annotations: { title: 'Read File Section', readOnlyHint: true, destructiveHint: false },
     description: `Read a line range from a file. Max ${CONFIG.MAX_FILE_LINES} lines per call. Must be within allowed directories. USE THIS — never ask the user to \`cat\`, \`head\`, \`tail\`, \`less\`, or paste file contents; you have direct read access within the allowlist.`,
@@ -2764,6 +2808,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await getPm2Status();
       case 'get_recent_errors':
         return await getRecentErrors(args.process_name as string, parseNum(args.lines, 20));
+      case 'get_recent_output':
+        return await getRecentOutput(args.process_name as string, parseNum(args.lines, 20));
       case 'read_file_section':
         return await readFileSection(args.file_path as string, parseNum(args.start_line, 1), parseNum(args.end_line, 1));
       case 'search_file':
