@@ -164,7 +164,7 @@ async function validateAgainstSupabase(token: string): Promise<boolean> {
     const url =
       `${SUPABASE_URL}/rest/v1/customers` +
       `?token=eq.${encodeURIComponent(token)}` +
-      `&status=eq.active` +
+      `&status=in.(active,trial,grace)` +
       `&select=id,plan,expires_at`;
 
     const resp = await fetch(url, {
