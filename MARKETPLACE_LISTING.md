@@ -33,6 +33,16 @@ Seventeen tools across multiple categories:
 
 ---
 
+## Why Direct Access Changes How You Use Claude
+
+Without a plugin, every Claude conversation about your server is a relay race. You describe a problem, Claude asks what the logs say, you SSH in and paste the logs, Claude asks for the config, you paste that, Claude suggests a command, you run it, paste the output back. A lot of that time gets spent figuring out *what Claude is asking for* — not reading the answer.
+
+Direct access breaks that loop. Claude tails the error log itself. Checks the PM2 status. Reads the config. Gets the full picture without a back-and-forth. For large outputs — full deploy logs, long stack traces, PM2 process lists — the difference is especially significant: no truncated pastes, no guessing what context Claude needs, no token overhead from repeatedly re-explaining what you're looking at.
+
+The result: you describe what's wrong once. Claude figures out what to look at, reads it, diagnoses the problem, and either tells you what's happening or just fixes it — all without you opening a terminal.
+
+---
+
 ## Not a Developer? This Is Still for You.
 
 If you have a website, app, or side project running on a VPS — and someone (a developer friend, a tutorial, a hosting setup wizard) got it running for you — this plugin is built for exactly your situation.

@@ -301,6 +301,32 @@ Paste the contents of [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) at the start of any
 Once loaded, try:
 > *"I’m having trouble with [describe issue]. What’s the most likely cause given how vps-control-mcp works?"*
 
+## Tips & Tricks
+
+### Describe outcomes, not commands
+You don't need to tell Claude which tool to use or what command to run. Just describe what you want. *"Why is my app crashing?"* works better than *"run get_recent_errors and tell me what you see."* Claude will check PM2 status, tail the error log, read the config — whatever it needs — and come back with a diagnosis.
+
+### Let Claude chain its own steps
+Once connected, Claude can check logs, find an error, trace it back through the deploy history, and suggest a fix — all in one go. You don't need to approve each step. Claude stops and asks only when it hits a blocked command or needs a decision only you can make.
+
+### For large log files and error outputs
+Don't copy-paste logs into the chat. Just say *"check the error log for my app."* Claude will read it directly — the full output, not just what fits in a paste window. For stack traces and long deploy logs, this makes a real difference.
+
+### Use a Claude Project for persistent context
+Add `CLAUDE_CONTEXT.md` (in this repo) to a Claude Project. Every conversation in that project starts with Claude already knowing the full plugin — all 17 tools, the security model, common server gotchas, diagnostic prompts. No re-explaining across sessions.
+
+### Claude in Chrome — extend Claude to your browser
+**Claude in Chrome** is a separate browser extension from Anthropic (beta) that gives Claude access to the web page you're currently viewing. Used alongside vps-control-mcp, it unlocks a powerful combination: Claude can read a page (GitHub PR, error dashboard, Cloudflare log, monitoring chart) and then act on your server in the same conversation.
+
+A few examples:
+- *"I'm looking at this GitHub PR — pull it and deploy it."* Claude reads the PR from your browser, gets the branch name, and runs the full deploy pipeline on your VPS.
+- *"This Datadog alert is showing a spike — what's happening on the server right now?"* Claude reads the alert details from your browser, then checks PM2 status and error logs on the server.
+- *"Look at this error on the status page and tell me what in my app is causing it."* Claude reads the page, cross-references it with your server logs.
+
+Claude in Chrome is available as a beta from [claude.ai](https://claude.ai). Install it, connect it, and it will appear as a tool alongside vps-control-mcp in the same conversation.
+
+---
+
 ## Getting Help
 
 - **Documentation:** [COMMANDS.md](COMMANDS.md) | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | [SECURITY.md](SECURITY.md)
