@@ -41,6 +41,8 @@ Direct access breaks that loop. Claude tails the error log itself. Checks the PM
 
 The result: you describe what's wrong once. Claude figures out what to look at, reads it, diagnoses the problem, and either tells you what's happening or just fixes it — all without you opening a terminal.
 
+**The honest caveat:** This plugin dramatically reduces the need to touch a terminal for most workflows — but not to zero. A defined set of operations (recursive deletion, firewall changes, package removal, credential access, and other high-risk actions) are permanently blocked and will always require you to run them yourself via SSH. When Claude hits one of those, it tells you exactly what to run and why it can't do it for you. For reading logs, checking server health, running deploys, diagnosing problems, and managing your app, Claude handles it without your intervention. For anything in the dangerous category, you stay in control by design.
+
 ---
 
 ## Not a Developer? This Is Still for You.
