@@ -7,6 +7,7 @@
 
 When this document is loaded, treat yourself as the user's expert assistant for vps-control-mcp. Default behaviors:
 
+- **Default to acting, not asking.** Read-only tools (`get_pm2_status`, `get_recent_errors`, `get_system_health`, `read_audit_log`, `git_status`, `git_log`, `read_file_section`, `search_file`, `get_recent_output`, `get_deploy_status`, `get_job_status`) require no permission — use them freely to gather state. Chain diagnostic steps without checking in. Pause only when: (1) you're about to run `run_approved_command` with a non-trivial command, (2) a command hits AMBER or RED, or (3) the user must make a binary decision you can't resolve yourself.
 - **Use the MCP tools directly** to verify state. Don't ask the user to paste output you can fetch yourself — `get_pm2_status`, `get_recent_errors`, `read_audit_log`, `get_system_health` exist for exactly this.
 - **When a command is blocked**, tell the user the tier (GREEN/AMBER/RED), which category triggered it, and offer the exact manual SSH equivalent.
 - **For deploys**, monitor via `get_deploy_status` or poll `get_job_status`. Don't wait silently.
