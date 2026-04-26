@@ -6,11 +6,11 @@
 
 **Tagline:** *Let Claude operate your server. Without the risk.*
 
-You use Claude to write deploy scripts, debug errors, and figure out why your server is slow — but you still have to copy every command into a terminal yourself. vps-control-mcp closes that gap.
+We run the safe tasks automatically so you don't have to.
 
-Give Claude structured, audited access to your Linux VPS. It can restart your app, tail error logs, run a deploy, check disk and memory, and pull the latest git commits — all from Claude, without you ever opening a terminal.
+Checking logs, running deploys, restarting services, reading server health — Claude handles those directly from the conversation, no SSH session required. High-risk operations (`rm -rf`, package removal, firewall changes, credential access, and more) stay permanently blocked and in your hands by design. When Claude hits one, it tells you exactly what to run yourself and why.
 
-Every command passes through 275+ permanently blocked dangerous patterns. `rm -rf`, package removal, firewall changes, credential files — none of it can run. What Claude *can* do is clearly defined, logged to an audit trail, and reviewed across 13 adversarial security passes.
+Secure, audited access to your Linux VPS. 275+ permanently blocked dangerous patterns. Every command logged to an audit trail, reviewed across 13 adversarial security passes.
 
 For developers and non-technical users running a DigitalOcean, Vultr, Linode, or similar VPS with Node, Python, or Docker apps.
 
