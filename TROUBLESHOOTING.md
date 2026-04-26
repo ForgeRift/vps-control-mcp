@@ -1,3 +1,5 @@
+> **Tip:** For faster diagnosis, load [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) into your Claude Project or paste it at the start of your session. It primes Claude with full plugin knowledge so it can help you self-diagnose most issues.
+
 # Troubleshooting — VPS Control MCP
 
 ## "Click to Reconnect" Prompt

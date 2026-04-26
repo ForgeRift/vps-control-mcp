@@ -199,6 +199,7 @@ Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Co
 ## Documentation
 
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** — Step-by-step setup guide for new users
+- **[CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md)** — Load into Claude for expert plugin assistance and self-diagnosis
 - **[COMMANDS.md](COMMANDS.md)** — Plain-English breakdown of all GREEN/AMBER/RED command categories
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Common issues and fixes
 - **[SECURITY.md](SECURITY.md)** — Full security model and configuration reference
