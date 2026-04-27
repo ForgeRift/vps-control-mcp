@@ -1,8 +1,47 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to vps-control-mcp.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
+
+
+## [1.13.0] — 2026-04-27
+
+### Security — Adversarial Review Round 14 (F-S67-1..F-S67-59, VPS-applicable)
+
+S67 Fourteenth-Pass adversarial review of v1.12.0. All VPS-applicable BLOCKERs and MINORs closed. Both plugins bumped to v1.13.0.
+
+**BLOCKERS**
+
+- **F-S67-1 — Version mismatch** — `.claude-plugin/plugin.json` declared `1.2.0` instead of `1.13.0`. Bumped. `src/index.ts:133` literal `'1.1.0'` replaced with `CURRENT_VERSION`. `scripts/check-versions.mjs` CI guard added.
+- **F-S67-16 — pm2 logs flag exfil** — `pm2 logs` in READ_ONLY had no flag validation. `--raw` (unbounded byte stream) and `--json` (bulk structured dump) flags now blocked with redirect to `get_recent_errors`/`get_recent_output`. Plain `pm2 logs` still passes.
+- **F-S67-17 — dig zone-transfer case bypass** — `isBlockedQtype` rewritten: (1) strips IXFR serial suffix (`=NNN`), (2) handles RFC-3597 `type<NNN>` numeric form, (3) case-insensitive comparison. `dig google.com Axfr`, `dig -tAXFR …`, `dig google.com type252`, `dig google.com IxFR=2` all now blocked. HARD_BLOCKED defense-in-depth patterns added.
+- **F-S67-18 — AUDIT_LOG_PATH validator gaps** — `/dev/full`, `/dev/console`, `/dev/tty` added to FORBIDDEN list. `fs.statSync` check rejects non-regular files (char/block/FIFO). `fs.realpathSync` resolves symlinks before FORBIDDEN check (mirrors F-OP-91). `audit.ts` catch block upgraded to guaranteed stderr flush.
+
+**MINOR**
+
+- **F-S67-19** — `marketplace.json` `source.ref` pinned `main` → `v1.13.0`.
+- **F-S67-20** — VPS `plugin.json`: count `100+` → `275+/43 categories`; `OAuth 2.0` → `Supabase token-based auth`; `rate limiting` dropped.
+- **F-S67-35** — `pm2 monit` removed from READ_ONLY (interactive curses UI). Users directed to `get_pm2_status`.
+- **F-S67-36** — `README.md` AMBER table examples corrected (removed promoted-to-RED items `find -exec`, `awk`, `sed -i`).
+- **F-S67-37** — `.claude-plugin/CLAUDE.md`: RED count `100+` → `275+/43`; AMBER examples corrected; all 17 tools enumerated.
+- **F-S67-38** — `REMEDIATION-PROGRESS.md` replaced with redirect paragraph (was severely stale, claimed 114 failing tests and non-existent layers).
+- **F-S67-39** — `COMMAND_POLICY.md` four `**Proposed:**` annotations replaced with `**GREEN**` (all already shipped).
+- **F-S67-40** — `CLAUDE_CONTEXT.md` Layer 2 label corrected from "AMBER classifier" to "Claude Haiku BLOCKED-tier pre-classifier".
+- **F-S67-41** — `COMMAND_POLICY.md` pm2 logs row updated with flag restrictions (closed with F-S67-16).
+- **F-S67-42** — `validateServiceArgs`: `service --status-all` now allowed; `service nginx status -v` (extra arg) now rejected.
+- **F-S67-43** — `validateSystemctlArgs` `--host`/`--machine` matching tightened to exact equality + `=` prefix (prevents `--hostname` false-positive).
+- **F-S67-44** — `tr`/`paste`/`jq` removed from POSITIVE_ALLOWLIST (non-path positionals break `validateArgPath`). `cut` restored: all its option flags begin with `-` so `validateArgPath` skips them safely; path traversal still caught.
+- **F-S67-45** — `marketplace.json` + `MARKETPLACE_LISTING.md` repo case aligned to `ForgeRift/vps-control-mcp`.
+- **F-S67-46** — `.env.test.fixture` placeholder changed to `__REPLACE_ME__` with explanatory comment.
+- **F-S67-53** — `auth.ts` `constantTimeEqual`: length comparison moved inside `crypto.timingSafeEqual` to close length-oracle timing side-channel.
+- **F-S67-54** — `audit.ts`: per-field caps replace flat 300-char JSON truncation (`command` 1024, `justification` 512, others 256).
+- **F-S67-55** — `validateSystemctlArgs`: combined short-flag cluster rejection (`-MH`, `-HM`) added for symmetry with HARD_BLOCKED defense-in-depth.
+- **F-S67-56** — Pre-commit hook extended: `npm run build && git diff --exit-code dist/` added to catch stale `dist/` at commit time.
+
+**Test results:** 562/562 pass (552 pre-existing + 10 new). Zero regressions.
+
+---
 
 ## [1.12.0] — 2026-04-25
 

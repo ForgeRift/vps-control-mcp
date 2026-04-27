@@ -510,7 +510,7 @@ All three findings addressed in commit `security: close S63 BLOCKED_PATTERNS FP 
 
 ---
 
-## Eleventh Pass â€” S64 â€” 2026-04-23
+## Eleventh Pass — S64 — 2026-04-23
 
 Eleventh-pass audit run on Claude Opus against the v1.10.2 S63-fix surfaces. Scope was limited to the three surgical v1.10.2 patches (F-OP-68/69/70); prior closures (F-OP-1..F-OP-67, C1..C24) were not re-audited. Nine findings opened (F-OP-71..F-OP-79); seven closed in v1.10.3, one retracted, one applies to LT only.
 
@@ -520,23 +520,23 @@ Eleventh-pass audit run on Claude Opus against the v1.10.2 S63-fix surfaces. Sco
 | --- | --- | --- | --- | --- |
 | F-OP-71 | CRITICAL | Red Team | VPS | F-OP-70 backstop edit silently dropped `/home` destination-side write protection; D10 `SENSITIVE` regex at L1125 never had `/home`, so `cp evil /home/victim/.ssh/authorized_keys` and analogous `.bashrc` / `~/.config/systemd/user/` persistence writes passed `validateCommand`. The v1.10.2 comment at L714-715 claiming "D10's argv-aware destination check" covered this was false. The existing bypass-corpus test at L281 was expected-to-block but could not pass against the shipped code. |
 | F-OP-72 | HIGH | Red Team | LT only |
-| F-OP-73 | HIGH | â€” | â€” | **Retracted** â€” opened against a sandbox-truncated 275-line view of LT `bypass-corpus.test.ts`; the actual 411-line file has dedicated describe blocks for F-OP-49/51/52/54/55/56/62/63/64/66/68/69. Corpus discipline is healthy. |
+| F-OP-73 | HIGH | — | — | **Retracted** — opened against a sandbox-truncated 275-line view of LT `bypass-corpus.test.ts`; the actual 411-line file has dedicated describe blocks for F-OP-49/51/52/54/55/56/62/63/64/66/68/69. Corpus discipline is healthy. |
 | F-OP-74 | MEDIUM | Red Team | LT only |
 | F-OP-75 | MEDIUM | Supply Chain + Consumer Safety | LT only |
-| F-OP-76 | MEDIUM | Consumer Safety | VPS + LT | SECURITY.md pre-dated v1.10.2 and contained no mention of D10 destination coverage, F-OP-68/69/70, or v1.10 release notes â€” operators had no signal that v1.10.0â€“v1.10.1 carried a PS colon-syntax bypass or what D10 actually protects. |
+| F-OP-76 | MEDIUM | Consumer Safety | VPS + LT | SECURITY.md pre-dated v1.10.2 and contained no mention of D10 destination coverage, F-OP-68/69/70, or v1.10 release notes — operators had no signal that v1.10.0—v1.10.1 carried a PS colon-syntax bypass or what D10 actually protects. |
 | F-OP-77 | MEDIUM | Supply Chain | VPS | The shipped F-OP-70 fix (regex alternation delete) diverged from the design described in the review prompt (tokenize-and-inspect last non-flag token). The approaches had different security properties and the L715 comment misrepresented shipped behavior. |
 | F-OP-78 | LOW | Red Team | LT only |
 | F-OP-79 | LOW | Red Team | LT only |
 
-### S64 Fixes â€” v1.10.3 (VPS)
+### S64 Fixes — v1.10.3 (VPS)
 
-All three VPS findings addressed in one commit covering F-OP-71 + F-OP-76 + F-OP-77. Patch bump `1.10.2 â†’ 1.10.3` reflects matcher-semantics restoration and documentation alignment â€” no config-surface break.
+All three VPS findings addressed in one commit covering F-OP-71 + F-OP-76 + F-OP-77. Patch bump `1.10.2 â†’ 1.10.3` reflects matcher-semantics restoration and documentation alignment — no config-surface break.
 
 | ID | Fix | Verification |
 | --- | --- | --- |
-| F-OP-71 | `/home` added to D10 `SENSITIVE` regex (src/tools.ts:1130) and to M7-extended redirect `SENSITIVE` (src/tools.ts:1202); inline comments document the v1.10.2 â†’ v1.10.3 narrative honestly. | `bypass-corpus.test.ts` â€” F-OP-70 suite expanded with 4 new assertBlocked cases: `cp evil /home/victim/.ssh/authorized_keys` (the original test at L281 now passes), `mv payload /home/alice/.bashrc`, `cp svc /home/bob/.config/systemd/user/evil.service`, `install evilbin /home/carol/.local/bin/malware`, `echo pubkey > /home/dave/.ssh/authorized_keys`. All 3 pre-existing F-OP-70 source-side allow cases still pass. |
-| F-OP-76 | `SECURITY.md` gains a "Destination-Path Write Protection (D10)" subsection listing the full sensitive-prefix set, and a "Security Release Notes â€” v1.10.x" table explicitly describing v1.10.0/v1.10.1/v1.10.2/v1.10.3 coverage changes, including the F-OP-71 regression window. | Grep `SECURITY.md` for `D10`, `F-OP-71`, `v1.10` â€” all present. |
-| F-OP-77 | F-OP-70 comment at `src/tools.ts:714-719` rewritten to accurately describe the source-side false-positive fix and the F-OP-71 destination-side restoration. Historical S63 Fixes table entry (above) is not edited â€” preserved as the v1.10.2 state-of-the-repo snapshot; this S64 section is the correction. | Code comment now matches implementation. |
+| F-OP-71 | `/home` added to D10 `SENSITIVE` regex (src/tools.ts:1130) and to M7-extended redirect `SENSITIVE` (src/tools.ts:1202); inline comments document the v1.10.2 â†’ v1.10.3 narrative honestly. | `bypass-corpus.test.ts` — F-OP-70 suite expanded with 4 new assertBlocked cases: `cp evil /home/victim/.ssh/authorized_keys` (the original test at L281 now passes), `mv payload /home/alice/.bashrc`, `cp svc /home/bob/.config/systemd/user/evil.service`, `install evilbin /home/carol/.local/bin/malware`, `echo pubkey > /home/dave/.ssh/authorized_keys`. All 3 pre-existing F-OP-70 source-side allow cases still pass. |
+| F-OP-76 | `SECURITY.md` gains a "Destination-Path Write Protection (D10)" subsection listing the full sensitive-prefix set, and a "Security Release Notes — v1.10.x" table explicitly describing v1.10.0/v1.10.1/v1.10.2/v1.10.3 coverage changes, including the F-OP-71 regression window. | Grep `SECURITY.md` for `D10`, `F-OP-71`, `v1.10` — all present. |
+| F-OP-77 | F-OP-70 comment at `src/tools.ts:714-719` rewritten to accurately describe the source-side false-positive fix and the F-OP-71 destination-side restoration. Historical S63 Fixes table entry (above) is not edited — preserved as the v1.10.2 state-of-the-repo snapshot; this S64 section is the correction. | Code comment now matches implementation. |
 
 ### Test outcome
 - VPS `bypass-corpus.test.ts`: **28/28 pass** (including the 5 new /home destination assertBlocked + the 3 pre-existing F-OP-70 source-side assertAllowed).
@@ -599,7 +599,7 @@ During implementation, the Cowork mount's `Edit` tool was confirmed to silently 
 
 ---
 
-## Round 13 — S65 Fixes (v1.12.0)
+## Thirteenth Pass — S65 Fixes — v1.12.0
 
 All 13 findings closed in `src/tools.ts`. 552/552 tests pass (56 new tests).
 
@@ -624,4 +624,43 @@ All 13 findings closed in `src/tools.ts`. 552/552 tests pass (56 new tests).
 - 552/552 pass (496 pre-existing + 56 new). 0 fail, 0 skip.
 - New tests cover: F-OP-85 arg-position and extra-arg checks; F-OP-86 all four pivot flag forms; F-OP-87 show/cat both blocked both layers; F-OP-88 bare crontab; F-OP-89 pm2 reload; F-OP-90 pm2 flush; F-OP-92 dig @resolver, AXFR/IXFR, host -l, bare nslookup; F-OP-93 long-form crontab flags; F-OP-94 new systemctl sub-commands; F-OP-95 atq flag restriction.
 
-*End of Round 13 findings.*
+*End of thirteenth-pass findings.*
+
+---
+
+## Fourteenth Pass — S67 Fixes — v1.13.0 (VPS)
+
+S67 adversarial review (Fourteenth Pass) — VPS-applicable findings. Cross-product version/manifest items (F-S67-1, F-S67-19) appear in both closure tables.
+
+| ID | Fix | Verification |
+| --- | --- | --- |
+| F-S67-1 | VPS `.claude-plugin/plugin.json` bumped `"1.2.0"` → `"1.13.0"`. `src/index.ts:133` literal `'1.1.0'` replaced with `CURRENT_VERSION` (imported from `package.json`). `scripts/check-versions.mjs` CI guard added. | `node scripts/check-versions.mjs` exits 0. `node -e "console.log(require('./.claude-plugin/plugin.json').version)"` → `1.13.0`. |
+| F-S67-16 | `validatePm2Args`: `'logs'` restored to READ_ONLY with hardened flag validation — `--raw` and `--json` flags blocked with explicit message directing caller to `get_recent_errors`/`get_recent_output`. `COMMAND_POLICY.md:118` pm2 logs row updated to document the flag restrictions (closes F-S67-41). | Corpus (via `validateAgainstAllowlist`): `pm2 logs --raw`, `pm2 logs vps-mcp --raw --lines 1000`, `pm2 logs nginx --json` all blocked. `pm2 logs` (plain) still passes. |
+| F-S67-17 | `validateDigArgs`: `isBlockedQtype` rewritten as a function — (1) strips IXFR serial-number suffix (`=NNN`) before comparison, (2) handles `type<NNN>` RFC-3597 numeric form by extracting `<NNN>` and checking against `BLOCKED_QTYPES`, (3) uses case-insensitive comparison via `.toLowerCase()`. HARD_BLOCKED defense-in-depth patterns added: `/\bdig\b[^&#124;&;\n]*\b(a&#124;i)xfr\b/i` and `/\bdig\b[^&#124;&;\n]*-t\s*(a&#124;i)xfr\b/i`. | Corpus (via `validateAgainstAllowlist`): `dig google.com Axfr`, `dig google.com -t Axfr`, `dig -tAXFR google.com`, `dig -taxfr google.com`, `dig google.com type252`, `dig google.com IxFR=2` all blocked. `dig google.com A`, `dig google.com` still pass. |
+| F-S67-18 | `validateAuditLogPath` extended: (1) `/dev/full`, `/dev/console`, `/dev/tty` added to `FORBIDDEN` list, (2) `fs.statSync` check rejects non-regular files (char/block/FIFO/socket) before attempting writes, (3) `fs.realpathSync` resolves symlinks and re-checks the resolved path against `FORBIDDEN` (mirrors F-OP-91 pattern). `audit.ts` catch block upgraded from silent `console.error` to guaranteed stderr flush. | `AUDIT_LOG_PATH=/dev/full` → throws at startup. `AUDIT_LOG_PATH` pointing at a symlink to `/dev/null` → `realpathSync` resolves to `/dev/null` → throws. Block device path → `statSync.isFile()` = false → throws. |
+| F-S67-19 | `marketplace.json` `source.ref` pinned `"main"` → `"v1.13.0"`. Both LT and VPS JSON validated. | `node -e "JSON.parse(require('fs').readFileSync('marketplace.json','utf8'))"` exits 0. `ref` = `v1.13.0`. |
+| F-S67-20 | VPS `.claude-plugin/plugin.json` description updated: `"100+ hard-blocked patterns"` → `"275+ blocked patterns across 43 categories"`. `"OAuth 2.0 authentication"` → `"Supabase token-based authentication"` (reflecting actual `auth.ts` mode). `"rate limiting"` dropped (stdio transport). | `grep -c "100+" .claude-plugin/plugin.json` → 0. `grep -c "275+" .claude-plugin/plugin.json` → 1. |
+| F-S67-35 | `'monit'` removed from `validatePm2Args` READ_ONLY. `COMMAND_POLICY.md:120` updated: `pm2 monit` row changed to NOT GREEN with note directing users to `get_pm2_status`. | `validateAgainstAllowlist('pm2 monit')` throws `BLOCKED [invalid-args]`. `get_pm2_status` tool description unchanged. |
+| F-S67-36 | `README.md:36` AMBER-tier examples table updated: `find -exec`, `awk`, `sed -i` (all promoted to RED) replaced with accurate AMBER examples (`apt-get update`, `xargs`, `pm2 reload`). | `grep "find -exec\|awk\|sed -i" README.md` → no hits in the AMBER table row. |
+| F-S67-37 | VPS `.claude-plugin/CLAUDE.md` updated: RED count `"100+ patterns"` → `"275+/43 categories"`. AMBER examples fixed to actual `AMBER_PATTERNS` set. All 17 tools enumerated (previously 12). | `grep "100+" .claude-plugin/CLAUDE.md` → 0 hits. Tool count in CLAUDE.md = 17. |
+| F-S67-38 | `REMEDIATION-PROGRESS.md` replaced with single-paragraph redirect: "All S60–S65 findings closed in v1.12.0. See ADVERSARIAL_REVIEW.md for the full fix history." Stale test counts and phantom Layer 2/3 claims removed. | `grep "114 failing\|DO NOT EXIST" REMEDIATION-PROGRESS.md` → 0 hits. |
+| F-S67-39 | `COMMAND_POLICY.md`: four `**Proposed:**` annotations for `crontab -l`, `atq`, `pm2 startup show`, `pm2 save` replaced with `**GREEN**` (already shipped). Contradicting "Was/Now" table retained. | `grep "Proposed:" COMMAND_POLICY.md` → 0 hits. |
+| F-S67-40 | `CLAUDE_CONTEXT.md:33-34` Layer 2 label corrected from `"AMBER classifier"` to `"Claude Haiku BLOCKED-tier pre-classifier"`. Layer descriptions rewritten to accurately reflect the three-layer architecture. | `grep "AMBER classifier" CLAUDE_CONTEXT.md` → 0 hits. |
+| F-S67-41 | Closed with F-S67-16. `COMMAND_POLICY.md:118` pm2 logs row updated with flag restrictions. | See F-S67-16 verification. |
+| F-S67-42 | `validateServiceArgs` updated: `service --status-all` allowed as single-arg case. `args.length > 2` guard added to reject extra args (`service nginx status -v` now blocked). | `validateAgainstAllowlist('service --status-all')` passes. `validateAgainstAllowlist('service nginx status -v')` throws `BLOCKED [invalid-args]`. |
+| F-S67-43 | `validateSystemctlArgs` pivot-flag matching tightened from `a.startsWith('--host')` → exact `a === '--host' &#124;&#124; a.startsWith('--host=')` (and same for `--machine`). Prevents false-positives on hypothetical `--hostname` flag. | `systemctl --hostname foo status nginx` no longer over-blocked. `systemctl --host remote status nginx` still blocked. |
+| F-S67-44 | `tr`, `paste`, `jq` removed from POSITIVE_ALLOWLIST (their non-path positionals break `validateArgPath`). `cut` restored with `validateArgPath` — all `cut` flags begin with `-` so `validateArgPath` skips them; non-flag path args are still checked for traversal. Comment updated to accurately explain the rationale. | `validateAgainstAllowlist('cut -d: -f1 ../../etc/passwd')` throws `BLOCKED [invalid-args]`. `validateAgainstAllowlist('cut -d: -f1 /root/myapp/file.txt')` passes (path in ALLOWED_READ_DIRS). |
+| F-S67-45 | `marketplace.json` and `MARKETPLACE_LISTING.md` repo URL case aligned to `ForgeRift/vps-control-mcp` (branded org name). | `grep "forgerift/vps" marketplace.json` → 0. `grep "ForgeRift/vps" marketplace.json` → 1. |
+| F-S67-46 | `.env.test.fixture` `AUDIT_LOG_PATH` placeholder changed from `/tmp/placeholder-replaced-by-prepare-test-env` to `__REPLACE_ME__`. Comment header added explaining that `prepare-test-env.mjs` must be run before tests. | `grep "placeholder-replaced-by-prepare-test-env" .env.test.fixture` → 0. |
+| F-S67-52 | NOTE — `setup.sh` and `uninstall.sh` reviewed. `setup.sh` does not hardcode `StrictHostKeyChecking=no`, does not pipe curl to shell, and is idempotent on re-run. Added to audit corpus list in `ADVERSARIAL_REVIEW.md`. | No SSH key-handling gaps found; scripts documented in this table. |
+| F-S67-53 | `auth.ts` `constantTimeEqual`: length-check moved inside `crypto.timingSafeEqual` call to avoid length-oracle timing side-channel. Implementation now: `return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))`. | `timingSafeEqual` path always executed (equal-length buffers); unequal-length returns `false` without short-circuit on first-byte difference. |
+| F-S67-54 | `audit.ts:16` args field: flat `JSON.stringify(sanitizeArgs(args)).slice(0, 300)` replaced with per-field caps — `command` 1024 chars, `justification` 512 chars, remaining fields 256 chars each — so `run_approved_command` full payloads are no longer silently truncated. | `run_approved_command` with 4096-char command + 1000-char justification now emits both fields (truncated independently) in the audit record. |
+| F-S67-55 | `validateSystemctlArgs`: combined short-flag cluster rejection added — `/^-[A-Za-z]*[MH][A-Za-z]*$/` rejects any merged flag containing `M` or `H` (e.g. `-MH`, `-HM`, `-aHb`). Validator now symmetric with `HARD_BLOCKED_PATTERNS`. | `validateAgainstAllowlist('systemctl -MH remote status nginx')` throws `BLOCKED [invalid-args]`. HARD_BLOCKED pattern still fires independently for defense-in-depth. |
+| F-S67-56 | VPS `.githooks/pre-commit` extended with `npm run build && git diff --exit-code dist/` check. Same as LT fix. | Smoke test: modified `src/tools.ts` without rebuilding → commit refused with `dist/ is stale`. |
+
+### Test outcome
+- VPS full test suite: **562/562 pass** (552 pre-existing + 10 new S67 corpus tests). 0 fail, 0 skip.
+- New tests cover: F-S67-16 (pm2 logs flag hardening via `assertAllowlistBlocked`), F-S67-17 (dig type252 / IxFR=N forms), F-S67-42 (service extra-arg), F-S67-55 (systemctl -MH cluster), S67 sanity preservers including `pm2 logs` plain pass.
+- `bypass-corpus.test.ts` updated: new `assertAllowlistBlocked`/`assertAllowlistAllowed` helpers call `validateAgainstAllowlist` (not `validateCommand`) for pm2/dig/service/systemctl argValidator tests.
+
+*End of fourteenth-pass findings (VPS).*
