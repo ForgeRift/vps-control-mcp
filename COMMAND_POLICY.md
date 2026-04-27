@@ -121,8 +121,8 @@ PM2 is the process manager running your applications. Access is split between re
 | ~~`pm2 monit`~~ | **Removed (F-S67-35).** `pm2 monit` opens an interactive ncurses UI that hangs in stdio mode. Use `get_pm2_status` instead. |
 | `pm2 id <name>` | Process ID lookup. |
 | `pm2 version`, `pm2 --version`, `pm2 -v` | Version check. |
-| **`pm2 save`** | **Proposed: move to GREEN.** Persists the current process list to disk so it survives reboots. Write op but bounded risk — worst case is persisting a temporarily bad process state, which is recoverable. Currently blocked; requires SSH paste. |
-| **`pm2 startup show`** | **Proposed: move to GREEN.** Prints the startup script command without executing it. Pure read. |
+| `pm2 save` | Persists the current process list to disk so it survives reboots. Write op but bounded risk — recoverable. |
+| `pm2 startup show` | Prints the startup script command without executing it. Pure read. |
 
 
 ### RED — Blocked (env-leak risk)
@@ -228,9 +228,9 @@ Nothing below can be executed through this plugin. No justification overrides it
 ### Scheduled Execution
 | Command | Reason |
 |---------|--------|
-| `crontab -e`, `crontab -r` | Create/delete cron jobs — persistent backdoor risk. **Proposed: allow `crontab -l`** (read-only list) via argv-aware allowlist. |
+| `crontab -e`, `crontab -r` | Create/delete cron jobs — persistent backdoor risk. `crontab -l` (read-only list) is allowed via argv-aware allowlist. |
 | `at` | Schedule one-time commands. |
-| `atq` | **Proposed: allow** — lists scheduled jobs, read-only. |
+| `atq` | Lists scheduled jobs, read-only. Allowed with restricted flags. |
 
 ### Code Execution Bypasses
 | Command | Reason |
