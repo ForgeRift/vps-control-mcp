@@ -53,7 +53,7 @@ You don't need to know what PM2 is, what a process ID means, or how git pull wor
 
 **Security architecture:** Three-tier command authorization (RED/AMBER/GREEN) with two independent enforcement layers — a static regex pattern matcher and a binary allowlist with per-binary arg validators. Both layers must pass for any command to execute. Defense-in-depth: dangerous sub-commands are blocked at the RED pattern layer *and* the arg validator layer, so a bypass of one doesn't constitute a bypass.
 
-**Hard-blocked surface:** 275+ patterns across 26 categories including recursive deletion, destructive git ops, database destruction, disk-level writes, system power state, credential/key destruction, firewall teardown, audit log destruction, container nuclear ops, kernel namespace escape, SSH pivot flags (`systemctl -H/--host/-M/--machine`), and more. HARD_BLOCKED patterns run synchronously before the AI classification layer and cannot be overridden. The full enumeration is in `COMMAND_POLICY.md`.
+**Hard-blocked surface:** 275+ patterns across 43 categories including recursive deletion, destructive git ops, database destruction, disk-level writes, system power state, credential/key destruction, firewall teardown, audit log destruction, container nuclear ops, kernel namespace escape, SSH pivot flags (`systemctl -H/--host/-M/--machine`), and more. HARD_BLOCKED patterns run synchronously before the AI classification layer and cannot be overridden. The full enumeration is in `COMMAND_POLICY.md`.
 
 **AI classification:** Optional Layer 2/3 pipeline using `ANTHROPIC_API_KEY`. Layer 2 is a single Claude classifier. Layer 3 is a multi-persona security board (Developer, Security Auditor, Ops Engineer) that must reach consensus. Fails closed when the API key is absent or the layer returns an unexpected format — you never get silent permissiveness.
 
@@ -61,7 +61,7 @@ You don't need to know what PM2 is, what a process ID means, or how git pull wor
 
 **Audit trail:** Every tool call logged as structured JSON with timestamp, tool name, tier classification, blocked status, sanitized arguments. Secrets auto-redacted via expanded prefix + key-name regex. Readable via `read_audit_log` tool. Rotates at 10MB, one backup retained.
 
-**Adversarial review:** 13 rounds of Opus-level adversarial review with 97 filed findings (F-OP-1 through F-OP-97), all documented and closed in `ADVERSARIAL_REVIEW.md`. Findings include Unicode homoglyph bypasses, newline injection, symlink escape, path traversal, arg-position bugs, remote pivot flags, zone transfer via DNS tools, and AI classifier prompt injection patterns. Every closure has a verification step.
+**Adversarial review:** 13 rounds of Opus-level adversarial review with 97 finding IDs issued, 65 documented in `ADVERSARIAL_REVIEW.md`; remaining IDs were merged or rolled up during triage. Findings include Unicode homoglyph bypasses, newline injection, symlink escape, path traversal, arg-position bugs, remote pivot flags, zone transfer via DNS tools, and AI classifier prompt injection patterns. Every closure has a verification step.
 
 **Transport:** Streamable HTTP over HTTPS. nginx + TLS (sslip.io + Let's Encrypt). Port 3001 localhost-only; external traffic on 443 only. Bearer token auth with optional Supabase multi-token (billing-integrated) mode.
 
@@ -84,7 +84,7 @@ You don't need to know what PM2 is, what a process ID means, or how git pull wor
 On the VPS:
 
 ```bash
-git clone https://github.com/forgerift/vps-control-mcp
+git clone https://github.com/ForgeRift/vps-control-mcp
 cd vps-control-mcp
 ./setup.sh
 ```
@@ -138,4 +138,4 @@ See [forgerift.io/#pricing](https://forgerift.io/#pricing) for full details.
 
 ## License
 
-Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Converts to MIT four years after each version's release date.
+Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Converts to MIT four years after each vers

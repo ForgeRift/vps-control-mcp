@@ -6,7 +6,7 @@
       "description": "Connect Claude to a Linux VPS via MCP - run commands, inspect PM2 logs, restart processes, and manage the server from Cowork.",
       "source": {
         "type": "github",
-        "repo": "forgerift/vps-control-mcp",
+        "repo": "ForgeRift/vps-control-mcp",
         "ref": "main"
       }
     }
