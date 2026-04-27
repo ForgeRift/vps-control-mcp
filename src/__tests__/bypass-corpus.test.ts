@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 // @ts-ignore
 import { __TEST_ONLY } from '../tools.js';
 
-const { validateCommand } = __TEST_ONLY;
+const { validateCommand, validateAgainstAllowlist } = __TEST_ONLY;
 
 function assertBlocked(cmd: string, label?: string): void {
   assert.throws(() => validateCommand(cmd), `Expected BLOCKED: ${label ?? cmd}`);
@@ -16,6 +16,17 @@ function assertBlocked(cmd: string, label?: string): void {
 
 function assertAllowed(cmd: string, label?: string): void {
   assert.doesNotThrow(() => validateCommand(cmd), `Expected ALLOWED: ${label ?? cmd}`);
+}
+
+// For commands routed through the POSITIVE_ALLOWLIST (pm2, dig, service, systemctl),
+// validateCommand only checks BLOCKED_PATTERNS. The argValidator security logic lives
+// in validateAgainstAllowlist. Use these helpers for such commands.
+function assertAllowlistBlocked(cmd: string, label?: string): void {
+  assert.throws(() => validateAgainstAllowlist(cmd), `Expected ALLOWLIST-BLOCKED: ${label ?? cmd}`);
+}
+
+function assertAllowlistAllowed(cmd: string, label?: string): void {
+  assert.doesNotThrow(() => validateAgainstAllowlist(cmd), `Expected ALLOWLIST-ALLOWED: ${label ?? cmd}`);
 }
 
 // ── C5: Kernel module operations ─────────────────────────────────────────
@@ -317,4 +328,53 @@ describe('H18: BYPASS_BINARIES allowlist', () => {
   it('blocks cargo install when BYPASS_BINARIES not set', () => {
     assertBlocked('cargo install evil-crate');
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S67 (Fourteenth Pass) bypass corpus additions
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── F-S67-16: pm2 logs lacks process-name validation ─────────────────────
+// pm2/dig/service/systemctl validation lives in validateAgainstAllowlist (argValidator),
+// not in validateCommand (BLOCKED_PATTERNS only). Use assertAllowlistBlocked here.
+describe('F-S67-16: pm2 logs --raw / --json exfil flags blocked', () => {
+  it('blocks pm2 logs --raw --lines 1000 (streaming raw bytes exfil)',
+    () => assertAllowlistBlocked('pm2 logs vps-mcp --raw --lines 1000', 'pm2 logs self-log read'));
+  it('blocks pm2 logs --raw (raw byte stream)',
+    () => assertAllowlistBlocked('pm2 logs --raw'));
+  it('blocks pm2 logs --json (structured bulk exfil)',
+    () => assertAllowlistBlocked('pm2 logs nginx --json'));
+});
+
+// ── F-S67-17: dig zone-transfer mixed-case + glued -tTYPE bypass ─────────
+describe('F-S67-17: dig AXFR/IXFR case-folding + -tTYPE glued form', () => {
+  it('blocks dig google.com Axfr',         () => assertAllowlistBlocked('dig google.com Axfr'));
+  it('blocks dig google.com -t Axfr',      () => assertAllowlistBlocked('dig google.com -t Axfr'));
+  it('blocks dig -tAXFR google.com',       () => assertAllowlistBlocked('dig -tAXFR google.com'));
+  it('blocks dig -taxfr google.com',       () => assertAllowlistBlocked('dig -taxfr google.com'));
+  it('blocks dig google.com type252',      () => assertAllowlistBlocked('dig google.com type252'));
+  it('blocks dig google.com IxFR=2',       () => assertAllowlistBlocked('dig google.com IxFR=2'));
+});
+
+// ── F-S67-42: service edge cases ─────────────────────────────────────────
+describe('F-S67-42: service --status-all and extra-arg', () => {
+  it('rejects service nginx status -v (extra arg)',
+    () => assertAllowlistBlocked('service nginx status -v'));
+});
+
+// ── F-S67-55: -MH combined short-flag form ───────────────────────────────
+describe('F-S67-55: systemctl combined short -MH cluster', () => {
+  it('blocks systemctl -MH remote status nginx (argValidator layer)',
+    () => assertAllowlistBlocked('systemctl -MH remote status nginx'));
+});
+
+// ── S67 sanity preservers ────────────────────────────────────────────────
+describe('S67 sanity preservers', () => {
+  it('still allows dig google.com',         () => assertAllowlistAllowed('dig google.com'));
+  it('still allows dig google.com A',       () => assertAllowlistAllowed('dig google.com A'));
+  it('still allows host google.com',        () => assertAllowlistAllowed('host google.com'));
+  it('still allows nslookup google.com',    () => assertAllowlistAllowed('nslookup google.com'));
+  it('still allows pm2 status',             () => assertAllowlistAllowed('pm2 status'));
+  it('still allows pm2 list',               () => assertAllowlistAllowed('pm2 list'));
+  it('still allows pm2 logs (plain)',        () => assertAllowlistAllowed('pm2 logs'));
 });

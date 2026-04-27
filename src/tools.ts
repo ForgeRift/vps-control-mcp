@@ -1694,10 +1694,11 @@ function allowFlags(...permitted: string[]): ArgValidator {
 // pm2: only read-only sub-commands that do NOT print process environment.
 // F-OP-6/7: jlist, prettylist, describe, info, show all include pm2_env which leaks MCP_AUTH_TOKEN.
 // Use get_pm2_status (structured, env-scrubbed) for status instead of pm2 jlist.
-// F-S67-16/F-S67-41: 'logs' removed — pm2 logs hangs without a process name, and with a name
-//   it streams indefinitely until timeout. Use get_recent_errors / get_recent_output tools instead.
 // F-S67-35: 'monit' removed — pm2 monit opens an interactive ncurses UI that hangs in stdio mode.
 //   Use get_pm2_status instead.
+// F-S67-16: 'logs' restored but hardened — block --raw and --json exfil flags.
+//   pm2 logs without flags is a bounded read-only tail (--lines default is 15).
+//   get_recent_errors / get_recent_output remain the preferred tools.
 const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
     'status', 'list', 'ls',
@@ -1705,6 +1706,7 @@ const validatePm2Args: ArgValidator = (args) => {
     // F-OP-90: flush removed — destroys all pm2 log evidence
     'save',   // persists current process list to disk — bounded write, fully recoverable
     // F-OP-89: reload removed from read-only — triggers live process restart (lifecycle-affecting)
+    'logs',   // F-S67-16: restored; bounded tail (default 15 lines). --raw/--json blocked below.
   ]);
   const sub = args[0];
   if (!sub) return null;
@@ -1717,6 +1719,18 @@ const validatePm2Args: ArgValidator = (args) => {
     if (subarg !== 'show') {
       return `pm2 startup without "show" is not permitted (it installs system startup hooks). ` +
         `Use "pm2 startup show" to print the startup command without executing it.`;
+    }
+    return null;
+  }
+
+  // F-S67-16: pm2 logs flag hardening. --raw streams raw log bytes without line limits;
+  // --json emits structured JSON for all processes (bulk exfil vector).
+  if (sub === 'logs') {
+    const BLOCKED_LOG_FLAGS = new Set(['--raw', '--json']);
+    for (const a of args.slice(1)) {
+      if (BLOCKED_LOG_FLAGS.has(a)) {
+        return `pm2 logs flag "${a}" is not permitted — use get_recent_errors / get_recent_output tools instead.`;
+      }
     }
     return null;
   }
@@ -1989,7 +2003,16 @@ const validateDigArgs: ArgValidator = (args) => {
   // Lowercase only; check via .toLowerCase() for case-insensitive matching.
   // 252 = AXFR numeric, 251 = IXFR numeric.
   const BLOCKED_QTYPES = new Set(['axfr', 'ixfr', '252', '251']);
-  const isBlockedQtype = (s: string): boolean => BLOCKED_QTYPES.has(s.toLowerCase());
+  const isBlockedQtype = (s: string): boolean => {
+    const lower = s.toLowerCase();
+    // Strip IXFR serial-number suffix (e.g. 'ixfr=2' → 'ixfr').
+    const base = lower.replace(/=.*$/, '');
+    if (BLOCKED_QTYPES.has(base)) return true;
+    // dig accepts typeNNN as a numeric query-type form (RFC 3597).
+    // e.g. 'type252' = AXFR numeric (252), 'type251' = IXFR numeric (251).
+    const typeNum = base.match(/^type(\d+)$/);
+    return typeNum !== null && BLOCKED_QTYPES.has(typeNum[1]);
+  };
   for (const a of args) {
     if (BLOCKED_FLAGS.has(a)) return `dig flag "${a}" is not permitted.`;
     if (a.startsWith('@')) return `dig "${a}" is not permitted — custom resolver pivots are blocked.`;
@@ -2067,13 +2090,12 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'sed':      { description: 'Stream editor (no -i, no e cmd)', argValidator: validateSedArgs },
   'sort':     { description: 'Sort lines',               argValidator: validateSortArgs },
   'uniq':     { description: 'Deduplicate lines',        argValidator: validateUniqArgs },
-  // F-S67-44: tr/cut/paste/jq removed from allowlist — validateArgPath rejects their
-  // non-path arguments (e.g. 'tr a-z A-Z', 'cut -d: -f1', 'jq .field'). Use these
-  // tools directly in an SSH session where no argument validation is needed.
-  // 'tr':    validateArgPath would reject character-class args as non-paths.
-  // 'cut':   validateArgPath would reject -d/-f flags as non-path arguments.
-  // 'paste': validateArgPath would reject '-' (stdin) and option flags.
-  // 'jq':    validateArgPath would reject filter expressions like '.field'.
+  // F-S67-44 revision: cut restored — all cut option args begin with '-' so validateArgPath
+  // skips them (only non-flag tokens are path-checked). Path traversal still blocked.
+  // tr/paste/jq remain removed: tr character-class args ('a-z') don't start with '-',
+  // paste '-' (stdin marker) is a non-flag non-path, jq filter expressions are non-paths —
+  // all three would be incorrectly rejected by validateArgPath as non-path strings.
+  'cut':      { description: 'Select fields/bytes from lines', argValidator: validateArgPath },
 
   // ── PM2 (read-only — restart via structured tool) ────────────────────────
   'pm2':      { description: 'PM2 process manager',      argValidator: validatePm2Args },
