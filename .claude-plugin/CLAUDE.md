@@ -6,13 +6,13 @@ You are connected to the user's remote Linux VPS via vps-control-mcp. Follow the
 
 This connector enforces a three-tier command authorization model. You MUST understand and respect it:
 
-### RED (Hard-Blocked) — 100+ patterns
+### RED (Hard-Blocked) — 275+ patterns/43 categories
 Commands that are permanently blocked. You will receive a structured error with category, reason, and ToS warning. Do NOT attempt to rephrase, encode, or chain commands to bypass blocks.
 
 Blocked categories: file deletion (rm, unlink, shred), disk operations (fdisk, mkfs, mount), system state (shutdown, reboot, sysctl, modprobe), process killing (kill, killall, pkill), user management (useradd, passwd, groupadd), permissions (chmod, chown, chgrp), network configuration (iptables, ip route, ufw), scheduled execution (crontab, at), service management (systemctl start/stop/enable/disable), code execution (eval, exec, python -c, bash -c), data exfiltration (curl, wget, scp, rsync, nc, socat, ftp), persistence (authorized_keys, .bashrc injection, cron), database writes (CREATE, DROP, ALTER, DELETE, TRUNCATE), package management (apt-get install/remove, pip install, npm install -g), container operations (docker run/exec/build, kubectl apply/delete), system directory writes, environment variable persistence, privilege escalation (sudo, su).
 
 ### AMBER (Warning-Required)
-Commands like `apt-get update`, `find -exec`, `xargs`, `awk`, `sed -i`. These force `dry_run=true` automatically with a visible warning. Call again with `dry_run=false` to proceed after acknowledging the risk.
+Commands like `apt-get update`, `xargs`, `pm2 reload`. These force `dry_run=true` automatically with a visible warning. Call again with `dry_run=false` to proceed after acknowledging the risk. Note: `find -exec`, `awk`, and `sed -i` are RED (hard-blocked), not AMBER.
 
 ### GREEN (Allowed)
 All structured tools and any `run_approved_command` that passes RED + AMBER checks.
@@ -23,7 +23,9 @@ Always prefer these over run_approved_command:
 
 - **get_pm2_status** — process list with CPU, memory, restarts, uptime
 - **get_system_health** — disk, memory, uptime, load average
-- **get_recent_errors** — tail PM2 error logs
+- **get_recent_errors** — tail PM2 error logs for a named process
+- **get_recent_output** — tail PM2 stdout logs for a named process
+- **read_audit_log** — read the immutable audit trail
 - **git_status** — repo status (read-only)
 - **git_log** — commit history (read-only)
 - **git_pull** — pull latest from origin (dry_run first)
@@ -32,7 +34,10 @@ Always prefer these over run_approved_command:
 - **search_file** — grep for patterns in files
 - **restart_process** — restart a PM2 process by name
 - **deploy** — full deploy pipeline (git pull → npm install → build → restart)
-- **get_deploy_status** / **get_job_status** — check async operation progress
+- **deploy_vps_mcp** — specialized deploy of the vps-control-mcp process itself
+- **get_deploy_status** — poll a background deploy job
+- **run_approved_command** — run an approved shell command (RED-tier blocked, audited)
+- **get_job_status** — poll output of a background run_approved_command
 
 ## run_approved_command Workflow
 
