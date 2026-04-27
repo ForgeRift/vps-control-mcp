@@ -1929,12 +1929,15 @@ const validateSystemctlArgs: ArgValidator = (args) => {
 // service: read-only 'status' only (S64 v1.11.0).
 // service <name> start/stop/restart/reload/enable/disable are blocked.
 // F-OP-85: was checking args[args.length-1] (last arg) — wrong. Action is at args[1].
+// F-S67-42: allow 'service --status-all' as a single-arg read-only invocation.
 const validateServiceArgs: ArgValidator = (args) => {
+  // F-S67-42: --status-all lists all service statuses — read-only, single-arg form.
+  if (args.length === 1 && args[0] === '--status-all') return null;
   if (args.length < 2) {
-    return `service requires exactly: service <name> status`;
+    return `service requires exactly: service <name> status (or service --status-all)`;
   }
   if (args.length > 2) {
-    return `service: too many arguments (expected: service <name> status).`;
+    return `service: too many arguments (expected: service <name> status or service --status-all).`;
   }
   const name = args[0];
   if (name.startsWith('-')) {
