@@ -4,16 +4,36 @@ import { CONFIG } from './config.js';
 // Maximum audit log size before rotation (10 MB default, configurable via AUDIT_MAX_SIZE_MB)
 const MAX_AUDIT_BYTES = (parseInt(process.env.AUDIT_MAX_SIZE_MB || '10', 10)) * 1024 * 1024;
 
+// F-S67-54: per-field caps instead of a flat 300-char slice on the JSON blob.
+// command is the most forensically important field: cap at 1024.
+// justification is free-text from the user: cap at 512.
+// Other fields are short by design; still falls back to JSON.stringify.
+function capField(v: unknown, maxLen: number): unknown {
+  return typeof v === 'string' && v.length > maxLen ? v.slice(0, maxLen) + '...[truncated]' : v;
+}
+
 export function auditLog(
   tool: string,
   args: Record<string, unknown>,
   outputChars: number,
   isCustomCommand = false
 ): void {
+  const sanitized = sanitizeArgs(args);
+  // Apply per-field caps before JSON serialization
+  const cappedArgs: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(sanitized)) {
+    if (k === 'command') {
+      cappedArgs[k] = capField(v, 1024);
+    } else if (k === 'justification') {
+      cappedArgs[k] = capField(v, 512);
+    } else {
+      cappedArgs[k] = v;
+    }
+  }
   const entry = {
     ts:            new Date().toISOString(),
     tool,
-    args:          JSON.stringify(sanitizeArgs(args)).slice(0, 300),
+    args:          cappedArgs,
     output_chars:  outputChars,
     dry_run:       args.dry_run ?? null,
     custom:        isCustomCommand || undefined,
