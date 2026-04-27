@@ -1,7 +1,7 @@
 {
   "name": "vps-control",
-  "version": "1.2.0",
-  "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 100+ hard-blocked patterns, sensitive file protection, OAuth 2.0 authentication, rate limiting, and full audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
+  "version": "1.13.0",
+  "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 275+ hard-blocked patterns/43 categories, sensitive file protection, Supabase token authentication, and full audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
   "author": {
     "name": "ForgeRift LLC",
     "email": "support@forgerift.io"
@@ -18,7 +18,6 @@
     "remote",
     "node",
     "security",
-    "oauth",
     "audit"
   ]
 }
