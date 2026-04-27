@@ -128,9 +128,21 @@ const STARTUP_NOTICE = [
 ].join('\n');
 
 
+// F-OP-30: read version from package.json at startup ΓÇö prior passes closed F-OP-15
+// but the hardcode was never actually removed. Fall back to 'unknown' on parse failure
+// (F-OP-48, seventh pass): an honest signal beats a stale literal that rots on every bump.
+let CURRENT_VERSION = 'unknown';
+try {
+  // dist/index.js ΓåÆ ../package.json (one level up from dist/)
+  const pkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+  if (pkg.version) CURRENT_VERSION = pkg.version;
+} catch { /* keep fallback constant */ }
+
+
 function createMcpServer(): Server {
   const server = new Server(
-    { name: 'vps-control-mcp', version: '1.1.0' },
+    { name: 'vps-control-mcp', version: CURRENT_VERSION },
     { capabilities: { tools: {} } }
   );
 
@@ -777,16 +789,6 @@ app.get('/sse', (_req, res) => {
 
 // --- Health check ------------------------------------------------------------
 
-// F-OP-30: read version from package.json at startup ΓÇö prior passes closed F-OP-15
-// but the hardcode was never actually removed. Fall back to 'unknown' on parse failure
-// (F-OP-48, seventh pass): an honest signal beats a stale literal that rots on every bump.
-let CURRENT_VERSION = 'unknown';
-try {
-  // dist/index.js ΓåÆ ../package.json (one level up from dist/)
-  const pkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'package.json');
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
-  if (pkg.version) CURRENT_VERSION = pkg.version;
-} catch { /* keep fallback constant */ }
 
 app.get('/health', async (req, res) => {
   // F-NEW-15 + F-OP-31: unauthenticated callers get a minimal response only.
