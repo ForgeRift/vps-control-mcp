@@ -2061,10 +2061,13 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'sed':      { description: 'Stream editor (no -i, no e cmd)', argValidator: validateSedArgs },
   'sort':     { description: 'Sort lines',               argValidator: validateSortArgs },
   'uniq':     { description: 'Deduplicate lines',        argValidator: validateUniqArgs },
-  'tr':       { description: 'Translate characters',     argValidator: validateArgPath },
-  'cut':      { description: 'Cut fields',               argValidator: validateArgPath },
-  'paste':    { description: 'Merge files/lines',        argValidator: validateArgPath },
-  'jq':       { description: 'JSON processor',           argValidator: validateArgPath },
+  // F-S67-44: tr/cut/paste/jq removed from allowlist — validateArgPath rejects their
+  // non-path arguments (e.g. 'tr a-z A-Z', 'cut -d: -f1', 'jq .field'). Use these
+  // tools directly in an SSH session where no argument validation is needed.
+  // 'tr':    validateArgPath would reject character-class args as non-paths.
+  // 'cut':   validateArgPath would reject -d/-f flags as non-path arguments.
+  // 'paste': validateArgPath would reject '-' (stdin) and option flags.
+  // 'jq':    validateArgPath would reject filter expressions like '.field'.
 
   // ── PM2 (read-only — restart via structured tool) ────────────────────────
   'pm2':      { description: 'PM2 process manager',      argValidator: validatePm2Args },

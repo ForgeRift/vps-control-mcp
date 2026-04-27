@@ -51,10 +51,10 @@ These commands execute without friction. They are still audit-logged and subject
 | `grep -r pattern /dir` | Recursive text search. |
 | `stat /path` | File metadata. |
 | `file /path` | File type detection. |
-| `sort`, `uniq`, `cut`, `tr` | Text processing (stdout only; no redirect to files). |
+| `sort`, `uniq` | Text processing (stdout only; no redirect to files). |
 | `sed 's/foo/bar/' file` | Stdout transform. `sed -i` (in-place) is RED. |
 | `awk '{print $1}' file` | Field extraction. `awk > /path` writes are RED. |
-| `jq .field file.json` | JSON parsing. |
+| `jq .field file.json` | JSON parsing. Note: `jq` is not available via `run_approved_command` (use SSH directly for jq filter expressions). |
 | `diff file1 file2` | File diff. |
 
 ### Node.js & npm
@@ -487,6 +487,19 @@ Even within allowed directories, these file patterns are blocked:
 | `/var/log/` | Host logs (PM2 app logs are accessible via `get_recent_errors` / `get_recent_output`) |
 | `/proc/`, `/sys/` | Kernel virtual filesystems |
 | `mcp-audit.log`, `/audit.log` | MCP audit log |
+
+---
+
+## Commands Not Supported via run_approved_command
+
+The following commands appear to be allowlisted but **do not work correctly** via `run_approved_command` because their arguments are not file paths — they are rejected by `validateArgPath`. Use them directly via SSH:
+
+| Command | Reason Not Supported |
+|---------|---------------------|
+| `tr a-z A-Z` | Arguments are character classes, not paths |
+| `cut -d: -f1 file` | Flag arguments rejected by path validator |
+| `paste - file` | Stdin marker `-` rejected by path validator |
+| `jq .field file.json` | Filter expressions rejected by path validator |
 
 ---
 
