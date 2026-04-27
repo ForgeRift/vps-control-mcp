@@ -17,3 +17,11 @@ if [ -n "$matches" ]; then
   echo "If intentional (rare), bypass with --no-verify and document why in the commit body."
   exit 1
 fi
+
+# F-S67-56: Verify dist/ is not stale relative to src/.
+# A committed dist/ that doesn't match the current src/ is a silent security hole
+# (old code ships while source looks patched). Build and check for changes.
+npm run build 2>/dev/null && git diff --exit-code dist/ || {
+  echo "[pre-commit] dist/ is stale — run npm run build first"
+  exit 1
+}
