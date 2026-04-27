@@ -1,10 +1,12 @@
-# vps-control-mcp
+﻿# vps-control-mcp
 
 [![Version](https://img.shields.io/badge/version-1.12.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
 Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers — all through structured tools with a three-tier security model and full audit logging.
+
+> **Built by [ForgeRift LLC](https://forgerift.io).** Claude is a product of Anthropic PBC. ForgeRift is an independent third-party developer and is not affiliated with, endorsed by, or sponsored by Anthropic.
 
 ![vps-control tools panel](docs/media/vps-control_01_tools.gif)
 
@@ -31,12 +33,12 @@ Three-tier access control prevents unauthorized operations:
 | Tier | Behavior | Examples |
 |------|----------|----------|
 | **RED (Blocked)** | Cryptographically forbidden—no override possible | File deletion, reboot, user management, shell invocation, all exfiltration (curl/wget/scp/ssh/rsync) |
-| **AMBER (Warning)** | Requires dry-run first; ToS warning | find -exec, xargs, awk, sed -i |
+| **AMBER (Warning)** | Requires dry-run first; ToS warning | apt-get update, xargs, pm2 reload |
 | **GREEN (Allowed)** | Permitted; subject to rate limits and audit logging | ls, cat, npm run, git push, pm2 restart |
 
 Additionally:
 - Sensitive files (.env, .ssh/, credentials) are blocked from all read operations, even within allowed directories
-- 275+ hard-blocked patterns across 26 security categories
+- 275+ hard-blocked patterns across 43 security categories
 - Request timeouts prevent runaway processes
 - Audit log with automatic 10MB rotation and secret redaction
 
@@ -49,7 +51,9 @@ For the full security model, see [SECURITY.md](SECURITY.md).
 ### Quick Start
 
 ```bash
-curl https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/setup.sh | bash
+git clone https://github.com/ForgeRift/vps-control-mcp.git
+cd vps-control-mcp
+chmod +x setup.sh && sudo ./setup.sh
 ```
 
 The setup script:
@@ -61,42 +65,35 @@ The setup script:
 
 ### Manual Installation
 
-```bash
-git clone https://github.com/ForgeRift/vps-control-mcp.git
-cd vps-control-mcp
-npm install
-npm run build
-cp .env.example .env
-# Edit .env with your configuration (see below)
-npm start
-```
+For advanced users — read `setup.sh` to understand the full sequence (license validation, Node/PM2, build, nginx + certbot for sslip.io TLS, firewall hardening). The script is the supported install path.
 
 ## Configuration
 
-All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
+All configuration is optional except `MCP_AUTH_TOKEN`.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MCP_AUTH_TOKEN` | — | Bearer token for authentication (required in single-token mode) |
+| `MCP_AUTH_TOKEN` | — | Bearer token for authentication |
 | `PORT` | 3001 | HTTP server port |
 | `APP_DIR` | — | Root directory for allowed file reads and git operations |
 | `PM2_LOG_DIR` | ~/.pm2/logs | Where PM2 writes process logs |
 | `AUDIT_LOG_PATH` | {APP_DIR}/mcp-audit.log | Immutable audit trail |
 | `ANTHROPIC_API_KEY` | — | Required for Layer 2/3 AI classification (Haiku + Sonnet safety board) |
 | `BYPASS_BINARIES` | — | Comma-separated process names exempt from RED-tier blocking (logged as `[SECURITY-BYPASS]`) |
-| `LAYER3_MODEL` | claude-sonnet-4-5 | Model used for Layer 3 safety board classification |
-| `LAYER_STRICT_MODE` | false | If true, Layer 2/3 failures block rather than pass-through |
+| `LAYER3_MODEL` | claude-sonnet-4-6 | Model used for Layer 3 safety board classification |
+| `LAYER_STRICT_MODE` | true | If false, Layer 2/3 failures pass-through rather than block (fail-closed by default) |
 | `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
 | `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors and get_recent_output |
+| `SUPABASE_URL` | — | Supabase project URL — enables multi-token billing mode (optional; single `MCP_AUTH_TOKEN` used when unset) |
+| `SUPABASE_SERVICE_KEY` | — | Supabase service-role key — required when `SUPABASE_URL` is set |
+| `SUPABASE_CIRCUIT_THRESHOLD` | 120 | Max Supabase validation calls per window before circuit opens |
 | `MAX_OUTPUT_CHARS` | 3000 | Max characters in command output |
 | `MAX_FILE_LINES` | 100 | Max lines when reading files |
 | `RATE_LIMIT_PER_MIN` | 60 | Requests per minute per token |
 | `AUDIT_MAX_SIZE_MB` | 10 | Audit log rotation threshold |
-| `SUPABASE_URL` | — | Supabase endpoint (optional, for billing integration) |
-| `SUPABASE_SERVICE_KEY` | — | Service key for multi-token mode |
 
 ## Available Tools
 
@@ -202,14 +199,4 @@ Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Co
 - **[CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md)** — Load into Claude for expert plugin assistance and self-diagnosis
 - **[COMMANDS.md](COMMANDS.md)** — Plain-English breakdown of all GREEN/AMBER/RED command categories
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Common issues and fixes
-- **[SECURITY.md](SECURITY.md)** — Full security model and configuration reference
-
-## Support
-
-- **Issues:** [GitHub Issues](https://github.com/ForgeRift/vps-control-mcp/issues)
-- **Security:** Report vulnerabilities to security@forgerift.io
-- **General:** support@forgerift.io
-
----
-
-**Built by ForgeRift LLC** | [forgerift.io](https://forgerift.io)
+- **[SECURIT
