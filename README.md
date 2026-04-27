@@ -1,10 +1,10 @@
-# vps-control-mcp
+﻿# vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.12.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
-[![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.12.1-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
-Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers — all through structured tools with a three-tier security model and full audit logging.
+Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers â€” all through structured tools with a three-tier security model and full audit logging.
 
 ![vps-control tools panel](docs/media/vps-control_01_tools.gif)
 
@@ -30,7 +30,7 @@ Three-tier access control prevents unauthorized operations:
 
 | Tier | Behavior | Examples |
 |------|----------|----------|
-| **RED (Blocked)** | Cryptographically forbidden—no override possible | File deletion, reboot, user management, shell invocation, all exfiltration (curl/wget/scp/ssh/rsync) |
+| **RED (Blocked)** | Cryptographically forbiddenâ€”no override possible | File deletion, reboot, user management, shell invocation, all exfiltration (curl/wget/scp/ssh/rsync) |
 | **AMBER (Warning)** | Requires dry-run first; ToS warning | find -exec, xargs, awk, sed -i |
 | **GREEN (Allowed)** | Permitted; subject to rate limits and audit logging | ls, cat, npm run, git push, pm2 restart |
 
@@ -49,7 +49,9 @@ For the full security model, see [SECURITY.md](SECURITY.md).
 ### Quick Start
 
 ```bash
-curl https://raw.githubusercontent.com/ForgeRift/vps-control-mcp/main/setup.sh | bash
+git clone https://github.com/ForgeRift/vps-control-mcp.git
+cd vps-control-mcp
+chmod +x setup.sh && sudo ./setup.sh
 ```
 
 The setup script:
@@ -77,74 +79,74 @@ All configuration is optional except `MCP_AUTH_TOKEN` (in single-token mode).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MCP_AUTH_TOKEN` | — | Bearer token for authentication (required in single-token mode) |
+| `MCP_AUTH_TOKEN` | â€” | Bearer token for authentication (required in single-token mode) |
 | `PORT` | 3001 | HTTP server port |
-| `APP_DIR` | — | Root directory for allowed file reads and git operations |
+| `APP_DIR` | â€” | Root directory for allowed file reads and git operations |
 | `PM2_LOG_DIR` | ~/.pm2/logs | Where PM2 writes process logs |
 | `AUDIT_LOG_PATH` | {APP_DIR}/mcp-audit.log | Immutable audit trail |
-| `ANTHROPIC_API_KEY` | — | Required for Layer 2/3 AI classification (Haiku + Sonnet safety board) |
-| `BYPASS_BINARIES` | — | Comma-separated process names exempt from RED-tier blocking (logged as `[SECURITY-BYPASS]`) |
+| `ANTHROPIC_API_KEY` | â€” | Required for Layer 2/3 AI classification (Haiku + Sonnet safety board) |
+| `BYPASS_BINARIES` | â€” | Comma-separated process names exempt from RED-tier blocking (logged as `[SECURITY-BYPASS]`) |
 | `LAYER3_MODEL` | claude-sonnet-4-5 | Model used for Layer 3 safety board classification |
 | `LAYER_STRICT_MODE` | false | If true, Layer 2/3 failures block rather than pass-through |
-| `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
-| `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
-| `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
+| `ALLOWED_PROCESSES` | â€” | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
+| `ALLOWED_READ_DIRS` | â€” | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
+| `ALLOWED_REDIRECT_HOSTS` | â€” | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
 | `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors and get_recent_output |
 | `MAX_OUTPUT_CHARS` | 3000 | Max characters in command output |
 | `MAX_FILE_LINES` | 100 | Max lines when reading files |
 | `RATE_LIMIT_PER_MIN` | 60 | Requests per minute per token |
 | `AUDIT_MAX_SIZE_MB` | 10 | Audit log rotation threshold |
-| `SUPABASE_URL` | — | Supabase endpoint (optional, for billing integration) |
-| `SUPABASE_SERVICE_KEY` | — | Service key for multi-token mode |
+| `SUPABASE_URL` | â€” | Supabase endpoint (optional, for billing integration) |
+| `SUPABASE_SERVICE_KEY` | â€” | Service key for multi-token mode |
 
 ## Available Tools
 
 ### Monitoring (5 tools)
 
-- `get_pm2_status` — View all running processes with memory/CPU/uptime
-- `get_recent_errors` — Tail error logs for a specific PM2 process
-- `get_recent_output` — Tail stdout logs for a specific PM2 process
-- `get_system_health` — Disk usage, memory, and uptime
-- `read_audit_log` — Read the immutable audit trail of all tool calls
+- `get_pm2_status` â€” View all running processes with memory/CPU/uptime
+- `get_recent_errors` â€” Tail error logs for a specific PM2 process
+- `get_recent_output` â€” Tail stdout logs for a specific PM2 process
+- `get_system_health` â€” Disk usage, memory, and uptime
+- `read_audit_log` â€” Read the immutable audit trail of all tool calls
 
 ![PM2 status demo](docs/media/vps-control_02_pm2-status.gif)
 
 ### File Access (2 tools)
 
-- `read_file_section` — Read a range of lines from an allowed file
-- `search_file` — Regex search within an allowed file
+- `read_file_section` â€” Read a range of lines from an allowed file
+- `search_file` â€” Regex search within an allowed file
 
 ### Git Operations (4 tools)
 
-- `git_status` — Show working tree status
-- `git_log` — View recent commits
-- `git_pull` — Fetch and merge from origin
-- `git_push` — Push commits to origin
+- `git_status` â€” Show working tree status
+- `git_log` â€” View recent commits
+- `git_pull` â€” Fetch and merge from origin
+- `git_push` â€” Push commits to origin
 
 ### Deployment (3 tools)
 
-- `deploy` — Full sequence: pull → install → build → restart → health check
-- `deploy_vps_mcp` — Specialized deploy for this server itself
-- `get_deploy_status` — Poll a background deploy job
+- `deploy` â€” Full sequence: pull â†’ install â†’ build â†’ restart â†’ health check
+- `deploy_vps_mcp` â€” Specialized deploy for this server itself
+- `get_deploy_status` â€” Poll a background deploy job
 
 ![Deploy pipeline demo](docs/media/vps-control_03_deploy.gif)
 
 ### Process Control (1 tool)
 
-- `restart_process` — Gracefully restart a PM2 process
+- `restart_process` â€” Gracefully restart a PM2 process
 
 ### Escape Hatch (2 tools)
 
-- `run_approved_command` — Execute arbitrary shell commands (subject to RED-tier blocking, rate limits, and audit logging)
-- `get_job_status` — Poll background command output
+- `run_approved_command` â€” Execute arbitrary shell commands (subject to RED-tier blocking, rate limits, and audit logging)
+- `get_job_status` â€” Poll background command output
 
 ## Connecting from Cowork
 
 1. Open [Cowork](https://cowork.dev)
-2. Settings → Connectors → Add Custom Connector
+2. Settings â†’ Connectors â†’ Add Custom Connector
 3. Paste your MCP URL (setup.sh prints this)
-4. Click Connect → authenticate via OAuth (or provide bearer token)
+4. Click Connect â†’ authenticate via OAuth (or provide bearer token)
 5. Run workflows using Claude
 
 ## Connecting from Claude Desktop
@@ -185,24 +187,24 @@ vps-control-mcp uses **streamable HTTP** with automatic reconnection:
 
 ## Pricing
 
-- **Individual:** $14.99/mo or $149/yr — [forgerift.io/#pricing](https://forgerift.io/#pricing)
+- **Individual:** $14.99/mo or $149/yr â€” [forgerift.io/#pricing](https://forgerift.io/#pricing)
 - **Bundle (vps-control-mcp + local-terminal-mcp):** $19.99/mo or $199/yr
 - **Founder Cohort:** $9.99/mo locked for the first 100 subscribers or 3 months post-marketplace approval (whichever comes first)
-- **14-day free trial** — no charge during trial period; no refunds after trial ends
+- **14-day free trial** â€” no charge during trial period; no refunds after trial ends
 
 ## License
 
-Source available under the [Business Source License 1.1](LICENSE) (BUSL 1.1). Converts to MIT four years after each version's release date.
+Released under the [MIT License](LICENSE).
 
 ![Audit log](docs/media/vps-control_05_audit-log.gif)
 
 ## Documentation
 
-- **[GETTING_STARTED.md](GETTING_STARTED.md)** — Step-by-step setup guide for new users
-- **[CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md)** — Load into Claude for expert plugin assistance and self-diagnosis
-- **[COMMANDS.md](COMMANDS.md)** — Plain-English breakdown of all GREEN/AMBER/RED command categories
-- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Common issues and fixes
-- **[SECURITY.md](SECURITY.md)** — Full security model and configuration reference
+- **[GETTING_STARTED.md](GETTING_STARTED.md)** â€” Step-by-step setup guide for new users
+- **[CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md)** â€” Load into Claude for expert plugin assistance and self-diagnosis
+- **[COMMANDS.md](COMMANDS.md)** â€” Plain-English breakdown of all GREEN/AMBER/RED command categories
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** â€” Common issues and fixes
+- **[SECURITY.md](SECURITY.md)** â€” Full security model and configuration reference
 
 ## Support
 

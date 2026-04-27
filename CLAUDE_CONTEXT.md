@@ -1,4 +1,4 @@
-# Claude Context — vps-control-mcp
+﻿# Claude Context — vps-control-mcp
 *Add this file to your Claude Project, paste it into Claude memory, or include it at the start of any session where you want Claude to act as a knowledgeable expert on this plugin.*
 
 ---
@@ -21,8 +21,8 @@ When this document is loaded, treat yourself as the user's expert assistant for 
 **vps-control-mcp** gives Claude a secure, audited connection to a Linux VPS. It runs as a Node.js process on your server, exposes 17 structured tools over HTTPS, and enforces a three-tier security model that hard-blocks dangerous operations at the code level — before any AI review.
 
 **Built by:** ForgeRift LLC  
-**Version:** 1.12.0  
-**License:** BUSL 1.1 (converts to MIT 4 years from each version's release date; see CHANGELOG.md)  
+**Version:** 1.12.1  
+**License:** MIT  
 **Docs:** github.com/ForgeRift/vps-control-mcp
 
 ### Architecture & Transport

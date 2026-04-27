@@ -1,8 +1,21 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to vps-control-mcp.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
+
+## [1.12.1] — 2026-04-27
+
+### Chore — S70 Pre-Submission Cleanup
+
+- **B-1** — Deleted `src/tools.ts.orig` merge-conflict artifact. Added `prepack` script to both repos: fails with exit 1 if any `.orig`/`.bak`/`.rej`/`.swp`/`_HEAD`/`_BRANCH` files are untracked in `src/` at pack time.
+- **B-2** — Deleted `package.json.nobuild` from repo root. Stale alternate config pinned to v1.9.0, missing `@anthropic-ai/sdk`; leaving it at root risks confusing marketplace legal scanners.
+- **B-3** — Reclassified `typescript` from `dependencies` to `devDependencies`. Mirrors correct placement from local-terminal-mcp. Regenerated `package-lock.json`.
+- **B-6** — Fixed `README.md` Quick Start: replaced `curl | bash` with `git clone` + `chmod +x setup.sh && sudo ./setup.sh`. The pipe-to-bash form fails because `setup.sh:43` uses `read -rsp` which requires a controlling TTY.
+- **D-1** — License consistency sweep: removed all BUSL 1.1 / Business Source License references from `README.md`, `MARKETPLACE_LISTING.md`, `CLAUDE_CONTEXT.md`. License stays MIT throughout. S69 audit prompt's BUSL reference was hallucinated; no BUSL adoption occurred. Documented here so future passes do not re-investigate.
+- **D-3** — Verified `LAYER_STRICT_MODE` disclosure in `MARKETPLACE_LISTING.md` alongside `BYPASS_BINARIES`.
+
+---
 
 ## [1.12.0] — 2026-04-25
 

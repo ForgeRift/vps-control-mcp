@@ -1,4 +1,4 @@
-# VPS-Control-MCP Security Framework
+﻿# VPS-Control-MCP Security Framework
 
 ## Executive Summary
 
@@ -177,6 +177,7 @@ The same sensitive-prefix list applies to shell-redirect destinations (`>`, `>>`
 **Known pre-v1.10.4 bypass scope:** v1.10.3 relied on `.gitignore`-only patterns to prevent re-introduction of merge-conflict and backup artifacts. A developer using `git add -f` or a file name outside the declared shapes (e.g. `tools_LOCAL.ts`, `foo.ts.orig.1`) could land artifacts through the normal commit flow with no defense. v1.10.4 adds `.githooks/pre-commit` that refuses the commit outright, with `package.json` `prepare` script wiring `core.hooksPath` to `.githooks` automatically on `npm install`. The guard is defense-in-depth; no credential or command-surface security gap is affected by the pre-v1.10.4 state.
 | v1.10.8 | — | `get_recent_output` tool (stdout log tail); `findPm2Log()` helper fixes log-file discovery when PM2 appends ID suffixes; `ALLOWED_PROCESSES` env var gates which PM2 processes log tools can read; startup notice on first tool call post-restart |
 | v1.11.0 | — | Command policy audit: 13 command reclassifications (systemctl read-only, service status, crontab -l, dig, nslookup, host unblocked; pm2 save + reload added to read-only set); `COMMAND_POLICY.md` published — full GREEN/AMBER/RED transparency reference |
+| v1.12.1 | — | S70 pre-submission cleanup: deleted `tools.ts.orig` merge artifact, reclassified `typescript` to devDependencies, added `prepack` artifact guard, removed all stale BUSL license references (license stays MIT), fixed `README.md` Quick Start curl-pipe TTY bug, rewrote `TROUBLESHOOTING.md` for .mcpb install model, added `LAYER_STRICT_MODE` disclosure to `MARKETPLACE_LISTING.md`. No security logic changes. |
 | v1.12.0 | — | Round 13 adversarial review (F-OP-85..F-OP-97): service arg-position bug, systemctl -H SSH pivot, systemctl show/cat env leak, bare crontab, pm2 flush/reload reclassified, findPm2Log symlink escape, dig @resolver+AXFR, host zone transfer, nslookup interactive mode, crontab long-form flags, systemctl env-manipulation, atq narrowed, AUDIT_LOG_PATH sensitive-file check. 552/552 tests. |
 
 ## Session-Level Security Controls
