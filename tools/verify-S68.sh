@@ -80,7 +80,7 @@ LT_CATS=$(node -e "
 ")
 LT_DOCS=$(grep -hE "[0-9]+ categor" $LT/SECURITY.md $LT/MARKETPLACE_LISTING.md $LT/CLAUDE_CONTEXT.md \
   $LT/.claude-plugin/CLAUDE.md $LT/README.md $LT/TROUBLESHOOTING.md 2>/dev/null \
-  | grep -oE "[0-9]+" | sort -u)
+  | grep -oE "[0-9]+ categor" | grep -oE "^[0-9]+" | sort -u)
 [ "$(echo "$LT_DOCS" | wc -l)" = "1" ] && [ "$LT_DOCS" = "$LT_CATS" ] && \
   miss F-S68-9 "LT doc category counts agree and match source ($LT_CATS)" || \
   confirm F-S68-9 "LT doc category counts disagree (docs say {$(echo $LT_DOCS | tr '\n' ' ')}, source says $LT_CATS)"
@@ -98,7 +98,7 @@ VP_CATS=$(node -e "
 ")
 VP_DOCS=$(grep -hE "[0-9]+ categor" $VPS/SECURITY.md $VPS/MARKETPLACE_LISTING.md $VPS/CLAUDE_CONTEXT.md \
   $VPS/.claude-plugin/CLAUDE.md $VPS/README.md $VPS/TROUBLESHOOTING.md 2>/dev/null \
-  | grep -oE "[0-9]+" | sort -u)
+  | grep -oE "[0-9]+ categor" | grep -oE "^[0-9]+" | sort -u)
 [ "$(echo "$VP_DOCS" | wc -l)" = "1" ] && [ "$VP_DOCS" = "$VP_CATS" ] && \
   miss F-S68-10 "VPS doc category counts agree and match source ($VP_CATS)" || \
   confirm F-S68-10 "VPS doc category counts disagree (docs say {$(echo $VP_DOCS | tr '\n' ' ')}, source says $VP_CATS)"
