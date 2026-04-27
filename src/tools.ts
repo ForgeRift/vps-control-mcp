@@ -1911,8 +1911,11 @@ const validateSystemctlArgs: ArgValidator = (args) => {
     'help', '--version', '-v',
   ]);
   // F-OP-86: block remote-host pivot flags before sub-command check
+  // F-S67-43: tightened from startsWith('--host') / startsWith('--machine') to exact
+  //           matches + '=' prefix to avoid over-blocking (e.g. hypothetical --hostname flag).
   for (const a of args) {
-    if (a === '-H' || a === '-M' || a.startsWith('--host') || a.startsWith('--machine')) {
+    if (a === '-H' || a === '--host' || a.startsWith('--host=') ||
+        a === '-M' || a === '--machine' || a.startsWith('--machine=')) {
       return `systemctl flag "${a}" is not permitted — remote host pivot is blocked.`;
     }
   }
