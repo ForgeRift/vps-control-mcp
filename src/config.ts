@@ -21,14 +21,42 @@ function requireEnv(key: string, example: string): string {
 
 // D7: Validate AUDIT_LOG_PATH at startup — reject paths that would silently
 // disable or compromise the audit trail.
+// F-S67-18: extended to block /dev/full, /dev/console, /dev/tty; reject char/block devices;
+//           resolve symlinks (realpathSync) and re-check the resolved path against FORBIDDEN.
 function validateAuditLogPath(p: string): string {
   const normalized = path.normalize(p).toLowerCase();
-  const FORBIDDEN = ['/dev/null', '/dev/zero', '/dev/random', 'nul', 'con', '/dev/stdout', '/dev/stderr'];
+  const FORBIDDEN = [
+    '/dev/null', '/dev/zero', '/dev/random', '/dev/urandom',
+    '/dev/full', '/dev/console', '/dev/tty',
+    'nul', 'con', '/dev/stdout', '/dev/stderr',
+  ];
   if (FORBIDDEN.includes(normalized)) {
     throw new Error(`AUDIT_LOG_PATH "${p}" is a forbidden sink — audit logging would be silently disabled.`);
   }
   if (normalized.startsWith('/tmp/') || normalized.startsWith('/var/tmp/') || normalized === '/tmp' || normalized === '/var/tmp') {
     throw new Error(`AUDIT_LOG_PATH "${p}" is in a world-writable temp directory — use a hardened log path (e.g. /var/log/forgerift/mcp-audit.log).`);
+  }
+  // Reject character and block devices — /dev/full silently discards writes,
+  // /dev/console and /dev/tty write to a terminal rather than a persistent log.
+  const stat = (() => { try { return fs.statSync(p); } catch { return null; } })();
+  if (stat && !stat.isFile() && !stat.isDirectory()) {
+    throw new Error(`AUDIT_LOG_PATH "${p}" is a special device — only regular files and directories are permitted.`);
+  }
+  // Resolve symlinks and re-check the real path against FORBIDDEN.
+  // Wrapping in try/catch: ENOENT is acceptable (file not yet created).
+  try {
+    const resolved = fs.realpathSync(p).toLowerCase();
+    if (FORBIDDEN.includes(resolved)) {
+      throw new Error(`AUDIT_LOG_PATH "${p}" resolves to a forbidden sink "${resolved}" — audit logging would be silently disabled.`);
+    }
+    const resolvedStat = (() => { try { return fs.statSync(resolved); } catch { return null; } })();
+    if (resolvedStat && !resolvedStat.isFile() && !resolvedStat.isDirectory()) {
+      throw new Error(`AUDIT_LOG_PATH "${p}" resolves to a special device "${resolved}" — only regular files are permitted.`);
+    }
+  } catch (e: unknown) {
+    // Re-throw our own errors; ENOENT (path doesn't exist yet) is acceptable.
+    if (e instanceof Error && e.message.startsWith('AUDIT_LOG_PATH')) throw e;
+    // Other errors (e.g. ENOENT) are fine — file may not exist yet.
   }
   // Ensure the parent directory exists; refuse to create arbitrary directories.
   const dir = path.dirname(p);
