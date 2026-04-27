@@ -7,7 +7,7 @@
       "source": {
         "type": "github",
         "repo": "ForgeRift/vps-control-mcp",
-        "ref": "main"
+        "ref": "v1.13.0"
       }
     }
   ]
