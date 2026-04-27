@@ -1694,6 +1694,10 @@ function allowFlags(...permitted: string[]): ArgValidator {
 // pm2: only read-only sub-commands that do NOT print process environment.
 // F-OP-6/7: jlist, prettylist, describe, info, show all include pm2_env which leaks MCP_AUTH_TOKEN.
 // Use get_pm2_status (structured, env-scrubbed) for status instead of pm2 jlist.
+// F-S67-16/F-S67-41: 'logs' removed — pm2 logs hangs without a process name, and with a name
+//   it streams indefinitely until timeout. Use get_recent_errors / get_recent_output tools instead.
+// F-S67-35: 'monit' removed — pm2 monit opens an interactive ncurses UI that hangs in stdio mode.
+//   Use get_pm2_status instead.
 const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
     'status', 'list', 'ls',
