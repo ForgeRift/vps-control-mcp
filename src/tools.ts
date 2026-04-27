@@ -1918,6 +1918,12 @@ const validateSystemctlArgs: ArgValidator = (args) => {
         a === '-M' || a === '--machine' || a.startsWith('--machine=')) {
       return `systemctl flag "${a}" is not permitted — remote host pivot is blocked.`;
     }
+    // F-S67-55: defence-in-depth — also reject any combined short-flag cluster that
+    // contains H or M (e.g. -MH, -HM, -aHb). HARD_BLOCKED_PATTERNS already catches
+    // these, but the validator should be symmetric.
+    if (/^-[A-Za-z]*[MH][A-Za-z]*$/.test(a)) {
+      return `systemctl flag "${a}" is not permitted — combined short flag containing H or M may include remote pivot (-H/--host or -M/--machine).`;
+    }
   }
   const sub = args[0];
   if (!sub) return `systemctl requires a sub-command. Allowed: ${[...READ_ONLY].join(', ')}.`;
