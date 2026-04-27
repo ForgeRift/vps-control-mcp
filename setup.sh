@@ -1,16 +1,17 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 # vps-control-mcp  —  Setup Script
 # Run on your VPS as root:  chmod +x setup.sh && ./setup.sh
 #
 # What this does:
-#   1. Installs Node.js, PM2 if missing
-#   2. Builds the MCP server
-#   3. Generates a secure auth token in .env
-#   4. Installs nginx + certbot, configures TLS via sslip.io
-#   5. Starts the MCP via PM2 (auto-restarts on crash + reboot)
-#   6. Hardens the firewall (port 3001 localhost-only)
-#   7. Prints your Cowork connect URL and step-by-step connection instructions
+#   1. Validates your ForgeRift subscription key
+#   2. Installs Node.js, PM2 if missing
+#   3. Builds the MCP server
+#   4. Saves your ForgeRift key as the auth token in .env
+#   5. Installs nginx + certbot, configures TLS via sslip.io
+#   6. Starts the MCP via PM2 (auto-restarts on crash + reboot)
+#   7. Hardens the firewall (port 3001 localhost-only)
+#   8. Prints your Cowork connect URL and step-by-step connection instructions
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -34,7 +35,38 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# ── 1. Detect public IP ────────────────────────────────────────────────────
+# ── 1. Validate ForgeRift subscription ───────────────────────────────────────
+
+echo "Enter your ForgeRift License Key"
+echo "(from your welcome email — subscribe at forgerift.io if you haven't yet):"
+echo ""
+read -rsp "License key: " FORGERIFT_KEY
+echo ""
+
+if [ -z "$FORGERIFT_KEY" ]; then
+  echo "ERROR: A ForgeRift License Key is required."
+  echo "  Subscribe at forgerift.io to get one."
+  exit 1
+fi
+
+echo "Validating subscription..."
+VALIDATE_RESPONSE=$(curl -fsSL \
+  "https://payments.104-131-74-82.sslip.io/validate?token=${FORGERIFT_KEY}" \
+  2>/dev/null || echo '{"valid":false,"reason":"Network error — check internet connectivity"}')
+
+if echo "$VALIDATE_RESPONSE" | grep -q '"valid":true'; then
+  echo "✓ Subscription confirmed"
+else
+  REASON=$(echo "$VALIDATE_RESPONSE" | grep -o '"reason":"[^"]*"' | head -1 | sed 's/"reason":"//;s/"$//')
+  echo "ERROR: Subscription validation failed."
+  [ -n "$REASON" ] && echo "  Reason: $REASON"
+  echo "  Check your key or visit forgerift.io to manage your subscription."
+  echo "  Support: support@forgerift.io"
+  exit 1
+fi
+echo ""
+
+# ── 2. Detect public IP ────────────────────────────────────────────────────
 
 echo "Detecting public IP..."
 PUBLIC_IP=$(curl -4 -fsSL https://icanhazip.com 2>/dev/null || \
@@ -56,7 +88,7 @@ echo "✓ TLS domain:  $SSLIP_DOMAIN"
 echo "✓ MCP URL:     $MCP_URL"
 echo ""
 
-# ── 2. Check / install Node.js ────────────────────────────────────────────
+# ── 3. Check / install Node.js ────────────────────────────────────────────
 
 if ! command -v node &>/dev/null; then
   echo "Installing Node.js 20..."
@@ -71,7 +103,7 @@ if ! command -v npm &>/dev/null; then
 fi
 echo "✓ npm $(npm -v)"
 
-# ── 3. Install PM2 ────────────────────────────────────────────────────────
+# ── 4. Install PM2 ────────────────────────────────────────────────────────
 
 if ! command -v pm2 &>/dev/null; then
   echo "Installing PM2 globally..."
@@ -79,7 +111,7 @@ if ! command -v pm2 &>/dev/null; then
 fi
 echo "✓ PM2 $(pm2 -v)"
 
-# ── 4. Install dependencies + build ──────────────────────────────────────
+# ── 5. Install dependencies + build ──────────────────────────────────────
 
 echo ""
 echo "Installing dependencies..."
@@ -95,14 +127,23 @@ if [ ! -f "$INSTALL_DIR/dist/index.js" ]; then
 fi
 echo "✓ Build complete"
 
-# ── 5. Generate .env ──────────────────────────────────────────────────────
+# ── 6. Generate .env ──────────────────────────────────────────────────────
+
+TOKEN="$FORGERIFT_KEY"
 
 if [ -f "$ENV_FILE" ]; then
   echo ""
-  echo "Existing .env found — preserving your configuration."
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  TOKEN="${MCP_AUTH_TOKEN:-}"
+  echo "Existing .env found — updating auth token with validated ForgeRift key."
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ ]] && export "$k=$v"
+  done < "$ENV_FILE"
+
+  # Update or insert MCP_AUTH_TOKEN
+  if grep -q "^MCP_AUTH_TOKEN=" "$ENV_FILE"; then
+    sed -i "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$TOKEN|" "$ENV_FILE"
+  else
+    echo "MCP_AUTH_TOKEN=$TOKEN" >> "$ENV_FILE"
+  fi
 
   # Ensure PUBLIC_URL is set (added in v1.2.0 — may be missing in older .env files)
   if ! grep -q "^PUBLIC_URL=" "$ENV_FILE" 2>/dev/null; then
@@ -114,11 +155,14 @@ if [ -f "$ENV_FILE" ]; then
   if ! grep -q "^RATE_LIMIT_PER_MIN=" "$ENV_FILE" 2>/dev/null; then
     echo "# RATE_LIMIT_PER_MIN=60" >> "$ENV_FILE"
   fi
+
+  echo "✓ Auth token updated in .env"
+  echo ""
+  echo "  -> If you previously configured a Cowork or Claude Desktop connector"
+  echo "     with an old token, update it now to the token printed below."
+  echo ""
 else
   echo ""
-  echo "Generating auth token..."
-  TOKEN=$(openssl rand -hex 32)
-
   cat > "$ENV_FILE" <<ENVEOF
 # ── Required ──────────────────────────────────────────────────────────────────
 MCP_AUTH_TOKEN=$TOKEN
@@ -142,10 +186,10 @@ PORT=$MCP_PORT
 # AUDIT_MAX_SIZE_MB=10
 ENVEOF
 
-  echo "✓ Auth token generated and saved to .env"
+  echo "✓ ForgeRift key saved as auth token in .env"
 fi
 
-# ── 6. Install nginx + certbot ────────────────────────────────────────────
+# ── 7. Install nginx + certbot ────────────────────────────────────────────
 
 echo ""
 echo "Installing nginx and certbot..."
@@ -169,7 +213,7 @@ server {
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_cache_bypass \$http_upgrade;
 
-        # SSE requires these — do not buffer
+        # Streamable HTTP / SSE — do not buffer
         proxy_buffering    off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
@@ -199,7 +243,7 @@ else
   echo "  Continuing setup without TLS — MCP will not be reachable from Cowork."
 fi
 
-# ── 7. Configure PM2 + startup persistence ────────────────────────────────
+# ── 8. Configure PM2 + startup persistence ────────────────────────────────
 
 echo ""
 
@@ -217,7 +261,7 @@ pm2 startup systemd -u root --hp /root >/dev/null 2>&1 \
   || true
 echo "✓ PM2 running + auto-start on reboot configured"
 
-# ── 8. Firewall: lock port 3001 to localhost ──────────────────────────────
+# ── 9. Firewall: lock port 3001 to localhost ──────────────────────────────
 
 echo ""
 echo "Hardening firewall..."
@@ -235,7 +279,7 @@ fi
 
 echo "✓ Port $MCP_PORT locked to localhost (nginx proxies TLS → localhost)"
 
-# ── 9. Verify + print connect instructions ────────────────────────────────
+# ── 10. Verify + print connect instructions ────────────────────────────────
 
 sleep 2
 
@@ -257,38 +301,31 @@ echo "Your MCP endpoint:"
 echo ""
 echo "  $MCP_URL"
 echo ""
-echo "Your auth token (keep this secret):"
+echo "Your auth token (this is your ForgeRift License Key — keep it secret):"
 echo ""
 echo "  $TOKEN"
 echo ""
 echo "────────────────────────────────────────────────────────"
-echo "  How to connect in Cowork (Claude Desktop)"
+echo "  How to connect in Cowork"
 echo "────────────────────────────────────────────────────────"
 echo ""
-echo "  Option A — Cowork plugin (recommended):"
-echo "    1. Open Cowork → Settings → MCP Connectors"
-echo "    2. Click 'Add connector' and enter:"
-echo "         URL:   $MCP_URL"
-echo "         Token: $TOKEN"
-echo "    3. Click Connect. A browser window opens and closes"
-echo "       automatically (OAuth handshake). This takes 2–5 seconds."
-echo "    4. Done. Your token lasts 30 days and refreshes automatically."
-echo "       No need to reconnect every session."
+echo "  1. Open Cowork → Settings → MCP Connectors"
+echo "  2. Click 'Add connector' and enter:"
+echo "       URL:   $MCP_URL"
+echo "       Token: $TOKEN  (same as your ForgeRift License Key)"
+echo "  3. Click Connect."
+echo "  4. Done — ask Claude 'Check my VPS health' to verify."
 echo ""
-echo "  Option B — claude_desktop_config.json (Claude Desktop app):"
-echo "    Add this to your config file:"
+echo "  Advanced: Claude Desktop config (claude_desktop_config.json):"
+echo "    Add this to your mcpServers section:"
 echo ""
-echo '    {'
-echo '      "mcpServers": {'
-echo '        "vps-control": {'
-echo '          "command": "mcp-remote",'
-echo '          "args": ['
-echo "            \"$MCP_URL\","
-echo '            "--header",'
-echo "            \"Authorization: Bearer $TOKEN\""
-echo '          ]'
-echo '        }'
-echo '      }'
+echo '    "vps-control": {'
+echo '      "command": "mcp-remote",'
+echo '      "args": ['
+echo "        \"$MCP_URL\","
+echo '        "--header",'
+echo "        \"Authorization: Bearer $TOKEN\""
+echo '      ]'
 echo '    }'
 echo ""
 echo "────────────────────────────────────────────────────────"

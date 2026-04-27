@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 // @ts-ignore
 import { __TEST_ONLY } from '../tools.js';
 
-const { validateCommand, validateAgainstAllowlist } = __TEST_ONLY;
+const { validateCommand, validateAgainstAllowlist, validateNodeArgs, validateNpmArgs, validatePm2Args } = __TEST_ONLY;
 
 function assertBlocked(cmd: string, label?: string): void {
   assert.throws(() => validateCommand(cmd), `Expected BLOCKED: ${label ?? cmd}`);
@@ -377,4 +377,51 @@ describe('S67 sanity preservers', () => {
   it('still allows pm2 status',             () => assertAllowlistAllowed('pm2 status'));
   it('still allows pm2 list',               () => assertAllowlistAllowed('pm2 list'));
   it('still allows pm2 logs (plain)',        () => assertAllowlistAllowed('pm2 logs'));
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// S68 (Fifteenth Pass) bypass corpus additions
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── F-S68-5: --env-file and --conditions blocked in validateNodeArgs ──────
+describe('F-S68-5: node --env-file / --conditions blocked', () => {
+  it('blocks node --env-file=/tmp/evil.env script.js',
+    () => { const r = validateNodeArgs(['--env-file=/tmp/evil.env', 'script.js']); assert.ok(r, 'expected block'); });
+  it('blocks node --env-file /tmp/evil.env script.js',
+    () => { const r = validateNodeArgs(['--env-file', '/tmp/evil.env', 'script.js']); assert.ok(r, 'expected block'); });
+  it('blocks node --conditions=evil script.js',
+    () => { const r = validateNodeArgs(['--conditions=evil', 'script.js']); assert.ok(r, 'expected block'); });
+  it('allows node /tmp/testapp/script.js (allowlisted path)',
+    () => { const r = validateNodeArgs(['/tmp/testapp/script.js']); assert.equal(r, null, `unexpected block: ${r}`); });
+});
+
+// ── F-S68-6: npm audit fix / signatures blocked ───────────────────────────
+describe('F-S68-6: npm audit destructive sub-commands blocked', () => {
+  it('blocks npm audit fix',
+    () => { const r = validateNpmArgs(['audit', 'fix']); assert.ok(r, 'expected block'); });
+  it('blocks npm audit signatures',
+    () => { const r = validateNpmArgs(['audit', 'signatures']); assert.ok(r, 'expected block'); });
+  it('allows npm audit (read-only scan)',
+    () => { const r = validateNpmArgs(['audit']); assert.equal(r, null, `unexpected block: ${r}`); });
+  it('allows npm audit --json',
+    () => { const r = validateNpmArgs(['audit', '--json']); assert.equal(r, null, `unexpected block: ${r}`); });
+});
+
+// ── F-S68-15: pm2 BLOCKED_SUBS ───────────────────────────────────────────
+describe('F-S68-15: pm2 blocked sub-commands', () => {
+  it('blocks pm2 install',
+    () => { const r = validatePm2Args(['install']); assert.ok(r, 'expected block'); });
+  it('blocks pm2 delete myapp',
+    () => { const r = validatePm2Args(['delete', 'myapp']); assert.ok(r, 'expected block'); });
+  it('blocks pm2 kill',
+    () => { const r = validatePm2Args(['kill']); assert.ok(r, 'expected block'); });
+  it('blocks pm2 link',
+    () => { const r = validatePm2Args(['link']); assert.ok(r, 'expected block'); });
+  it('blocks pm2 update',
+    () => { const r = validatePm2Args(['update']); assert.ok(r, 'expected block'); });
+  it('still allows pm2 status',
+    () => { const r = validatePm2Args(['status']); assert.equal(r, null, `unexpected block: ${r}`); });
+  it('still allows pm2 save (persists process list)',
+    () => { const r = validatePm2Args(['save']); assert.equal(r, null, `unexpected block: ${r}`); });
+  it('still allows pm2 logs myapp',
+    () => { const r = validatePm2Args(['logs', 'myapp']); assert.equal(r, null, `unexpected block: ${r}`); });
 });

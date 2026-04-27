@@ -19,7 +19,9 @@ export function auditLog(
   isCustomCommand = false
 ): void {
   const sanitized = sanitizeArgs(args);
-  // Apply per-field caps before JSON serialization
+  // F-S68-4: Apply per-field caps before JSON serialization — every string field is
+  // capped to prevent a single oversized arg from inflating the log line beyond 8 KiB,
+  // which would trigger premature rotation and delete forensic evidence.
   const cappedArgs: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(sanitized)) {
     if (k === 'command') {
@@ -27,12 +29,17 @@ export function auditLog(
     } else if (k === 'justification') {
       cappedArgs[k] = capField(v, 512);
     } else {
-      cappedArgs[k] = v;
+      // All other string fields capped at 512 chars; non-strings pass through unchanged.
+      cappedArgs[k] = capField(v, 512);
     }
   }
+  // F-S68-19: cap the tool name too — a custom MCP server could register a 1 MiB tool name.
+  const cappedTool = typeof tool === 'string' && tool.length > 256
+    ? tool.slice(0, 256) + '...[truncated]'
+    : tool;
   const entry = {
     ts:            new Date().toISOString(),
-    tool,
+    tool:          cappedTool,
     args:          cappedArgs,
     output_chars:  outputChars,
     dry_run:       args.dry_run ?? null,

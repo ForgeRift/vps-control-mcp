@@ -1,4 +1,4 @@
-# Getting Started with vps-control-mcp
+﻿# Getting Started with vps-control-mcp
 
 Welcome. This guide walks you through connecting Claude to your VPS (Virtual Private Server) so you can manage it through conversation — deploy code, check logs, restart services, and more — without logging into the server yourself.
 
@@ -38,76 +38,53 @@ Before you install anything, make sure you have:
 
 ## Step 1: Run the Server-Side Setup Script
 
-SSH into your VPS:
+SSH into your VPS as root:
 
 ```
 ssh root@your-server-ip
 ```
 
-Then run the ForgeRift setup script:
+Clone the repository and run the setup script:
 
 ```
-curl -fsSL https://forgerift.io/install/vps-control.sh | bash
+git clone https://github.com/ForgeRift/vps-control-mcp.git
+cd vps-control-mcp
+chmod +x setup.sh && sudo ./setup.sh
 ```
 
-This script:
-- Checks for Node.js 18+ and installs it if missing
-- Clones the vps-control-mcp repository
-- Creates a `.env` file for your configuration
-- Sets up the plugin as a PM2 process (so it restarts if the server reboots)
-- Configures nginx to proxy HTTPS traffic to the plugin
+The script will prompt you for your **ForgeRift License Key** (from your welcome email) and validate it before continuing. It then:
+- Installs Node.js and PM2 if missing
+- Builds the plugin
+- Saves your license key as the auth token in `.env`
+- Installs nginx + certbot and issues a Let's Encrypt TLS certificate automatically
+- Starts the plugin as a PM2 process (auto-restarts on crash or reboot)
+- Locks port 3001 to localhost only
 
-When the script finishes, it prints your **plugin URL** — something like `https://vps-control.104-131-74-82.sslip.io`. Write this down.
+When the script finishes, it prints your **plugin URL** and your **auth token** (which is your ForgeRift License Key). Write down the URL — you'll need it in Step 2.
 
 ---
 
-## Step 2: Configure Your Environment
+## Step 2: Connect in Cowork
 
-The setup script creates a `.env` file at `/root/vps-control-mcp/.env`. Open it:
+Open **Cowork** on your computer and go to **Settings → MCP Connectors**.
 
-```
-nano /root/vps-control-mcp/.env
-```
+Click **Add connector** and enter:
+- **URL:** The plugin URL from Step 1 (e.g., `https://104-131-74-82.sslip.io/mcp`)
+- **Token:** Your ForgeRift License Key (the same one you entered during setup)
 
-You'll see:
+Click **Connect**. If everything worked, vps-control-mcp will appear as an active connector.
 
-```
-MCP_AUTH_TOKEN=          # Required — set this first
-ANTHROPIC_API_KEY=       # Required for AI safety review (Layer 3)
-PORT=3010
-AUDIT_LOG_PATH=/root/vps-control-mcp/audit.log
-APP_DIR=/root/vps-control-mcp
-```
-
-**Fill in the required values:**
-
-- **MCP_AUTH_TOKEN** — Make up a strong secret here (like a random 32-character string). This is the password Claude uses to connect to your plugin. Keep it secret — anyone with this token can run commands on your server.
-
-  To generate one: `openssl rand -hex 16`
-
-- **ANTHROPIC_API_KEY** — Your Anthropic API key from [console.anthropic.com](https://console.anthropic.com). This is separate from your Claude account — it's used by the plugin's AI safety layer to review potentially risky commands before running them. The key needs enough credits to run occasional reviews; typical usage costs pennies per day.
-
-Save the file (`Ctrl+X`, then `Y`, then Enter) and restart the plugin:
-
-```
-pm2 restart vps-mcp
+**Using Claude Desktop instead of Cowork?** Add this to your `claude_desktop_config.json`:
+```json
+"vps-control": {
+  "command": "mcp-remote",
+  "args": ["https://your-server-url/mcp", "--header", "Authorization: Bearer your-forgerift-key"]
+}
 ```
 
 ---
 
-## Step 3: Add the Plugin to Claude Desktop
-
-Open Claude Desktop on your computer. Go to **Settings → Plugins → Add Plugin**.
-
-Enter:
-- **Plugin URL:** The URL from Step 1 (e.g., `https://vps-control.104-131-74-82.sslip.io`)
-- **Auth token:** The `MCP_AUTH_TOKEN` value you set in Step 2
-
-Click **Connect**. If everything worked, you'll see vps-control-mcp appear in your active plugins list.
-
----
-
-## Step 4: Verify the Connection
+## Step 3: Verify the Connection
 
 Start a new conversation in Claude and type:
 
@@ -119,7 +96,7 @@ Claude should respond with your server's CPU, memory, disk usage, and the status
 
 ---
 
-## Step 5: Your First 5 Minutes
+## Step 4: Your First 5 Minutes
 
 Here are some things to try right away to get comfortable with how the plugin works:
 
@@ -269,13 +246,11 @@ pm2 save
 cd /root && rm -rf vps-control-mcp
 ```
 
-Then remove the nginx configuration for the plugin (`/etc/nginx/sites-enabled/vps-control`) and reload nginx.
+Then remove the nginx configuration: `rm /etc/nginx/sites-enabled/vps-mcp /etc/nginx/sites-available/vps-mcp` and reload nginx with `systemctl reload nginx`.
 
 ---
 
----
-
-## Step 6: Set Up Claude as Your Plugin Expert (Recommended)
+## Recommended Next Step: Set Up Claude as Your Plugin Expert (Recommended)
 
 Claude works even better when it already knows how vps-control-mcp works — which tools are available, what commands are blocked, and how to interpret what it sees on your server. This step primes Claude with that knowledge so it can self-diagnose common issues and give you accurate guidance without you having to explain the plugin each time.
 
@@ -299,7 +274,7 @@ Paste the contents of [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) at the start of any
 **What CLAUDE_CONTEXT.md contains:** all 17 tools and what they do, the full RED/AMBER/GREEN security model with command examples, common gotchas, configuration reference, and diagnostic prompts.
 
 Once loaded, try:
-> *"I’m having trouble with [describe issue]. What’s the most likely cause given how vps-control-mcp works?"*
+> *"I'm having trouble with [describe issue]. What's the most likely cause given how vps-control-mcp works?"*
 
 ## Getting Help
 

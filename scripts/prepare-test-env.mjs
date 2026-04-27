@@ -41,5 +41,19 @@ const envTest = readFileSync(target, 'utf8')
   .replace(/^AUDIT_LOG_PATH=.*$/m, `AUDIT_LOG_PATH=${join(testLogDir, 'mcp-audit.log')}`);
 writeFileSync(target, envTest);
 
-writeFileSync(join(testAppDir, 'out.log'), '');           // used by cat/tail/grep/sed tests
-writeFileSync(join(testAppDir, 'script.js'), '// stub\n'); // used by "node script.js passes"
+// Write stub files; tolerate EACCES when a previous session already created them
+// (the files already have the correct content -- empty out.log, stub script.js).
+function tryWrite(filePath, content) {
+  try {
+    writeFileSync(filePath, content);
+  } catch (err) {
+    if (err.code === 'EACCES') {
+      // File already exists from a prior session and has correct content -- continue.
+      console.warn(`[prepare-test-env] skipping ${filePath} (EACCES -- pre-existing stub)`);
+    } else {
+      throw err;
+    }
+  }
+}
+tryWrite(join(testAppDir, 'out.log'), '');           // used by cat/tail/grep/sed tests
+tryWrite(join(testAppDir, 'script.js'), '// stub\n'); // used by "node script.js passes"

@@ -12,7 +12,7 @@ All commands are classified into three security tiers: RED (hard-blocked), AMBER
 
 ### RED Tier: Hard-Blocked Commands
 
-RED tier commands are permanently blocked regardless of context. Attempts to execute RED tier commands fail with a clear error message and are logged as security events. The block list encompasses 100+ patterns across 20 security categories.
+RED tier commands are permanently blocked regardless of context. Attempts to execute RED tier commands fail with a clear error message and are logged as security events. The block list encompasses 275+ patterns across 43 security categories.
 
 **File Deletion & Data Destruction**
 
@@ -130,6 +130,18 @@ GREEN tier commands execute immediately with full audit logging. This includes:
 - VCS operations: `git status`, `git log`, `git diff` (read-only)
 - System info: `uname`, `hostname`, `uptime`, `free`, `lsb_release`
 
+### ⚠️  LAYER_STRICT_MODE and Fail-Open Behaviour (F-S68-18 / F-S68-33)
+
+By default (`LAYER_STRICT_MODE=true`, the factory default), any failure of the Layer 2 or Layer 3 AI classification API causes the command to be **blocked**. This is the safe default.
+
+**If you set `LAYER_STRICT_MODE=false`** (documented as "graceful degradation" when no API key is available):
+
+- Layer 2 and Layer 3 API failures are silently swallowed.
+- **All AMBER commands are promoted to GREEN** — the AI classification tier is skipped entirely.
+- Only the synchronous hard-blocked RED patterns still apply.
+
+This is a significant security posture change. The middle-ground alternative — treating AMBER commands as RED when the AI tier is unavailable — is not the current default but is the safer choice for shared environments. Only set `LAYER_STRICT_MODE=false` on trusted single-user VPS instances where the consequence of mis-classifying an AMBER command is acceptable.
+
 ## Sensitive File Protection
 
 Beyond command-level blocking, vps-control-mcp enforces file-level access control. Even when a command is in the GREEN tier and would normally be allowed, reads of sensitive files are blocked unconditionally.
@@ -218,9 +230,9 @@ vps-control-mcp supports two authentication modes: single-token and Supabase mul
 
 A single bearer token is configured at startup via the `MCP_AUTH_TOKEN` environment variable. All requests must include this token in the HTTP `Authorization: Bearer <token>` header. This is suitable for personal or small-team deployments.
 
-**Supabase Multi-Token Billing Mode**
+**Supabase Multi-Token Mode**
 
-In this mode, vps-control-mcp verifies JWT tokens issued by a Supabase Auth instance. Each user has a unique token, enabling per-user billing and usage tracking. Token verification uses Supabase's published public keys (JWKS endpoint). Token expiration and revocation are enforced.
+When `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are configured, tokens are opaque strings looked up against a `customers` table via PostgREST. The service-role key authenticates the lookup. A token is accepted iff (a) a row exists with that token, (b) the row's `status` is one of `active`/`trial`/`grace`, (c) the plan is in the `vps-control` allowlist, and (d) `expires_at` is null or in the future. Results are cached in memory for the configured TTL. A circuit breaker (configurable via `SUPABASE_CIRCUIT_THRESHOLD`, default 120) suspends Supabase lookups when cache-misses exceed the threshold per minute, returning 503 until traffic subsides — protects against quota exhaustion under credential-stuffing.
 
 ### OAuth 2.0 Integration
 

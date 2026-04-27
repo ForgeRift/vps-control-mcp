@@ -5,6 +5,27 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.13.1] — 2026-04-27
+
+### Security — Adversarial Review Round 15 (F-S68-1..F-S68-21) — Remediation Pass
+
+S68 Fifteenth-Pass adversarial review remediation. All 8 BLOCKERs and 13 MINORs closed. 4 JUDGEMENT-REQUIRED items documented.
+
+- **F-S68-1** — Working tree committed and v1.13.1 tagged (v1.13.0 was never tagged).
+- **F-S68-4/F-S68-19** — `audit.ts`: all string fields now capped at 512 chars (not just `command`/`justification`); `tool` field capped at 256. Eliminates audit-log rotation amplification via oversized args.
+- **F-S68-5** — `validateNodeArgs`: `--env-file` and `--conditions` (and `=` forms) added to `BLOCKED_EXACT`/`BLOCKED_PREFIXES`. Closes Node 20.6+ env-preload vector.
+- **F-S68-6** — `validateNpmArgs`: `npm audit fix` and `npm audit signatures` (write ops) now rejected. `npm audit --json` still allowed.
+- **F-S68-7** — Deploy and background job IDs now include `crypto.randomBytes(4).toString('hex')` suffix. Eliminates same-millisecond ID collision.
+- **F-S68-8** — `validatePath` now opens file with `O_NOFOLLOW` and returns `{ real, fd }`. `readFileSection` passes fd to `createReadStream`; `searchFile` uses `/proc/self/fd/${fd}`. Closes TOCTOU symlink-swap window.
+- **F-S68-10** — Doc category count corrected: 43 → 44 in `MARKETPLACE_LISTING.md` and `.claude-plugin/CLAUDE.md`.
+- **F-S68-14** — `persistJob` now serialises concurrent writes through a Promise-chain mutex, preventing second-writer-wins data loss.
+- **F-S68-15** — `validatePm2Args`: explicit `BLOCKED_SUBS` set added — `pm2 install`, `pm2 update`, `pm2 kill`, `pm2 deepMonitoring`, and 12 others now rejected before fall-through.
+- **F-S68-17** — `AbortSignal.timeout(15_000)` added to Layer 2 and Layer 3 API calls.
+- **F-S68-18/F-S68-33** — `SECURITY.md` now documents `LAYER_STRICT_MODE=false` fail-open behaviour with prominent warning.
+- **F-S68-20** — `.github/workflows/dist-freshness.yml` added.
+- **F-S68-21** — `typescript` moved from `dependencies` to `devDependencies` in `package.json`.
+
+
 ## [1.13.0] — 2026-04-27
 
 ### Security — Adversarial Review Round 14 (F-S67-1..F-S67-59, VPS-applicable)

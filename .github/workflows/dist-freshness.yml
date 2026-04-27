@@ -1,0 +1,30 @@
+name: dist freshness
+
+# F-S68-20: Assert that the committed dist/ matches what `npm run build` produces.
+# Without this, a `git commit --no-verify` bypass of the pre-commit hook can land
+# stale compiled output — a regression of S67-F3.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  dist-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - name: Assert dist/ is up to date
+        run: |
+          if ! git diff --exit-code dist/; then
+            echo ""
+            echo "ERROR: dist/ is stale. Run 'npm run build' and commit the result."
+            exit 1
+          fi

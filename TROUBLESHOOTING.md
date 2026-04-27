@@ -6,7 +6,7 @@
 
 You will occasionally see a **"click to reconnect"** prompt in Claude Desktop or Cowork. This is expected and not a sign anything is broken.
 
-**Why it happens:** vps-control-mcp runs as a persistent process on your VPS. When it restarts — during an update, after a server reboot, or if PM2 autorestarted it after a crash — the active connection drops and your Claude client detects the gap. It cannot silently resume on its own: that behavior is controlled by the Claude Desktop app, not by vps-control-mcp.
+**Why it happens:** vps-control-mcp runs as a persistent process on your VPS. When it restarts — during an update, after a server reboot, or if PM2 autorestarted it after a crash — the active connection drops and your Claude client detects the gap. vps-control-mcp now restores the session transparently when a Cowork SSE client reconnects after a restart (a GET on an unknown session ID recreates the server+transport under the original session ID — see CHANGELOG 1.10.7). The "click to reconnect" prompt only appears when the client cannot reach the server at all (TLS expiry, nginx down, port held by a stale process).
 
 **What to do:** Click the reconnect button. The session restores instantly — no reconfiguration, no lost context. The first tool call after reconnect will include a brief note confirming the restart happened.
 
@@ -45,7 +45,7 @@ Commands that take longer than 30 seconds should use `run_in_background=true`. T
 - **read_file_section path restriction:** File reads are restricted to `ALLOWED_READ_DIRS` (set in `.env`, defaults to your `APP_DIR` and `PM2_LOG_DIR`). Files outside these directories must be accessed via `run_approved_command` with `cat` or `head`.
 - **`.env` file access blocked:** Reading `.env` files is blocked by the sensitive file guard (info-leak category). This is correct security behavior — environment variables should not be exposed via MCP.
 - **High restart count in PM2:** A large restart count on `vps-mcp` is expected — each `deploy_vps_mcp` call restarts the process. This is not indicative of instability. Concern only if the process is in a crash loop (restart count climbing in real-time with no deploys in progress).
-- **Reconnect prompt after deploy:** Each deploy restarts vps-mcp, which drops the active connection. Claude Desktop/Cowork will show a "reconnect" prompt — this requires one manual click. It cannot reconnect silently because that behavior is controlled by the Claude client app. See the "Click to Reconnect" section at the top of this file for full details.
+- **Reconnect prompt after deploy:** Each deploy restarts vps-mcp, which drops the active connection. vps-control-mcp transparently restores the session when a Cowork SSE client reconnects (see CHANGELOG 1.10.7). The "click to reconnect" prompt is a fallback for edge cases where the server cannot be reached at all (TLS expiry, nginx down, port held by a stale process). See the "Click to Reconnect" section at the top of this file for full details.
 
 ## Support
 
