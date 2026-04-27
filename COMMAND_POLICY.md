@@ -117,8 +117,8 @@ PM2 is the process manager running your applications. Access is split between re
 | `pm2 status` | Process list with state, CPU, memory. |
 | `pm2 list` | Alias for status. |
 | `pm2 ls` | Alias for status. |
-| `pm2 logs <name>` | Tail log output. Prefer `get_recent_errors` / `get_recent_output` tools. |
-| `pm2 monit` | Real-time monitoring (non-interactive; returns a snapshot). |
+| ~~`pm2 logs <name>`~~ | **Removed (F-S67-16/F-S67-41).** Use `get_recent_errors` / `get_recent_output` tools instead — they return structured, capped output without hanging the connection. `pm2 logs` is no longer accepted by the validator. |
+| ~~`pm2 monit`~~ | **Removed (F-S67-35).** `pm2 monit` opens an interactive ncurses UI that hangs in stdio mode. Use `get_pm2_status` instead. |
 | `pm2 id <name>` | Process ID lookup. |
 | `pm2 version`, `pm2 --version`, `pm2 -v` | Version check. |
 | **`pm2 save`** | **Proposed: move to GREEN.** Persists the current process list to disk so it survives reboots. Write op but bounded risk — worst case is persisting a temporarily bad process state, which is recoverable. Currently blocked; requires SSH paste. |

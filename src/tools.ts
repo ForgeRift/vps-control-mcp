@@ -1038,6 +1038,10 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   // F-OP-86: systemctl -H/--host/-M/--machine pivots execution to remote hosts
   { pattern: /\bsystemctl\b[^|&;\n]*(-H\b|--host[=\s]|--machine[=\s]|-M\b)/i, category: 'ssh-tunnel-pivot' },
 
+  // ── F-S67-17: dig zone-transfer defence-in-depth ─────────────────────────
+  { pattern: /\bdig\b[^|&;\n]*\b(a|i)xfr\b/i,       category: 'dns-zone-transfer' },
+  { pattern: /\bdig\b[^|&;\n]*-t\s*(a|i)xfr\b/i,    category: 'dns-zone-transfer' },
+
   // ── Category 11: Container / orchestration nuclear ────────────────────────
   { pattern: /\bdocker\b[^|&;\n]*\bsystem\b[^|&;\n]*\bprune\b[^|&;\n]*-[a-zA-Z]*[af]/i, category: 'container-nuclear' },
   { pattern: /\bkubectl\b[^|&;\n]*\bdelete\b[^|&;\n]*(namespace\s+--all|--all\s+-A|--all-namespaces)/i, category: 'container-nuclear' },
@@ -1102,11 +1106,11 @@ const HARD_BLOCKED_PATTERNS: HardBlockedPattern[] = [
   { pattern: /\bxargs\b/i,                                                     category: 'recursive-file-deletion' },
 
   // ── H13: Privilege escalation alternatives to sudo/su ───────────────────
-  { pattern: /\bsudoedit\b/i,                                                  category: 'privilege-escalation' },
-  { pattern: /\bpkexec\b/i,                                                    category: 'privilege-escalation' },
-  { pattern: /\bdoas\b/i,                                                      category: 'privilege-escalation' },
-  { pattern: /\brunuser\b/i,                                                    category: 'privilege-escalation' },
-  { pattern: /\bmachinectl\b[^|&;\n]*\bshell\b/i,                             category: 'privilege-escalation' },
+  { pattern: /\bsudoedit\b/i,                                                  category: 'priv-esc' },
+  { pattern: /\bpkexec\b/i,                                                    category: 'priv-esc' },
+  { pattern: /\bdoas\b/i,                                                      category: 'priv-esc' },
+  { pattern: /\brunuser\b/i,                                                    category: 'priv-esc' },
+  { pattern: /\bmachinectl\b[^|&;\n]*\bshell\b/i,                             category: 'priv-esc' },
 
   // ── H14: Scheduled execution ─────────────────────────────────────────────
   { pattern: /\bsystemd-run\b/i,                                               category: 'scheduled-exec' },
@@ -1692,7 +1696,7 @@ function allowFlags(...permitted: string[]): ArgValidator {
 // Use get_pm2_status (structured, env-scrubbed) for status instead of pm2 jlist.
 const validatePm2Args: ArgValidator = (args) => {
   const READ_ONLY = new Set([
-    'status', 'list', 'ls', 'logs', 'monit',
+    'status', 'list', 'ls',
     'id', 'version', '--version', '-v',
     // F-OP-90: flush removed — destroys all pm2 log evidence
     'save',   // persists current process list to disk — bounded write, fully recoverable
@@ -1961,13 +1965,25 @@ const validateCrontabArgs: ArgValidator = (args) => {
 // dig: DNS lookup. Block batch file, bind-interface, @resolver pivots, and AXFR/IXFR.
 // F-OP-92: @resolver routes queries through attacker-controlled DNS server.
 // F-OP-92: AXFR/IXFR = full zone transfer — enumerates all hostnames.
+// F-S67-17: BLOCKED_QTYPES is lowercase only; comparison is case-insensitive.
+//           Numeric types 252 (AXFR) and 251 (IXFR) are also blocked.
+//           Glued -tTYPE form (e.g. -tAXFR) is also checked.
 const validateDigArgs: ArgValidator = (args) => {
   const BLOCKED_FLAGS = new Set(['-f', '-b']);
-  const BLOCKED_QTYPES = new Set(['axfr', 'ixfr', 'AXFR', 'IXFR']);
+  // Lowercase only; check via .toLowerCase() for case-insensitive matching.
+  // 252 = AXFR numeric, 251 = IXFR numeric.
+  const BLOCKED_QTYPES = new Set(['axfr', 'ixfr', '252', '251']);
+  const isBlockedQtype = (s: string): boolean => BLOCKED_QTYPES.has(s.toLowerCase());
   for (const a of args) {
     if (BLOCKED_FLAGS.has(a)) return `dig flag "${a}" is not permitted.`;
     if (a.startsWith('@')) return `dig "${a}" is not permitted — custom resolver pivots are blocked.`;
-    if (BLOCKED_QTYPES.has(a)) return `dig query type "${a}" is not permitted — zone transfers are blocked.`;
+    // Standalone query type token (e.g. AXFR, axfr, 252)
+    if (isBlockedQtype(a)) return `dig query type "${a}" is not permitted — zone transfers are blocked.`;
+    // Glued -tTYPE form (e.g. -tAXFR, -taxfr, -t252)
+    const glued = a.match(/^-t(.+)$/i);
+    if (glued && isBlockedQtype(glued[1])) {
+      return `dig query type "${a}" is not permitted — zone transfers are blocked.`;
+    }
   }
   return null;
 };
