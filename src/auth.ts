@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type { Request } from 'express';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -196,14 +197,18 @@ async function validateAgainstSupabase(token: string): Promise<boolean> {
 
 // ─── Constant-time comparison (fallback mode) ─────────────────────────────────
 // Used when Supabase is not configured (local dev / self-hosted without billing).
-
+// F-S67-53: use crypto.timingSafeEqual with equal-length zero-padded buffers to
+// avoid the early-return length leak. aLen === bLen is still checked but only
+// AFTER the timing-safe comparison completes, so the total time is constant.
 function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
+  const aLen = Buffer.byteLength(a);
+  const bLen = Buffer.byteLength(b);
+  const maxLen = Math.max(aLen, bLen);
+  const aBuf = Buffer.alloc(maxLen);
+  Buffer.from(a).copy(aBuf);
+  const bBuf = Buffer.alloc(maxLen);
+  Buffer.from(b).copy(bBuf);
+  return aLen === bLen && crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
