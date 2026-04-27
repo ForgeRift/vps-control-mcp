@@ -30,8 +30,8 @@ vps-control-mcp uses **StreamableHTTP over HTTPS**. Default: port 3001 on the VP
 
 Every command passes through three security layers before executing:
 - **Layer 1:** Hard-coded RED block list — regex + path checks in source code. Instant rejection, no AI consulted.
-- **Layer 2:** AMBER classifier — deterministic pattern match that flags commands for AI review.
-- **Layer 3:** AI safety board — Sonnet or Haiku reads the full conversation context and approves or rejects AMBER commands. If Layer 3 is unreachable (missing API key, no credits, network failure), behavior is controlled by `LAYER_STRICT_MODE` (default: pass-through).
+- **Layer 2:** Claude Haiku BLOCKED-tier pre-classifier (deterministic pattern match → Haiku AI check). Layer 3: multi-persona BLOCKED-tier board (Sonnet). AMBER is a separate tier that warns but does not invoke AI — AMBER commands proceed after dry-run confirmation. If Layer 2/3 is unreachable (missing API key, no credits, network failure), behavior is controlled by `LAYER_STRICT_MODE` (default: block / fail-closed; set `LAYER_STRICT_MODE=false` to allow pass-through).
+- **Layer 3:** Multi-persona safety board (Sonnet) for BLOCKED-tier commands requiring deeper context review.
 
 ---
 
@@ -219,7 +219,7 @@ If the audit log shows activity you didn't authorize:
 | `BYPASS_BINARIES` | `process:category` pairs exempt from blocking (logged as `[SECURITY-BYPASS]`) |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | Rate limit on `run_approved_command` (default: 10, resets on process restart) |
 | `MAX_LOG_LINES` | Lines returned by log tools (default: 50) |
-| `LAYER_STRICT_MODE` | If true, Layer 2/3 failures block rather than pass-through |
+| `LAYER_STRICT_MODE` | Default `true` (fail-closed). Set `false` to allow pass-through when Layer 2/3 is unreachable. |
 | `RATE_LIMIT_PER_MIN` | Requests per minute per token (default: 60) |
 | `AUDIT_MAX_SIZE_MB` | Audit log rotation threshold (default: 10MB) |
 
