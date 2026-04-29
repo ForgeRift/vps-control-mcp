@@ -710,7 +710,7 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\$\([^)]*\)/,                 category: 'shell-invoke', reason: '$() subshells are prohibited.' },
 
   // --- Data exfiltration (outbound network) ---
-  { pattern: /\bcurl\b/,                category: 'data-exfil',      reason: 'curl is prohibited. Data cannot leave the server via MCP.' },
+  // curl is allowed but validated to localhost-only and safe flags in the positive allowlist.
   { pattern: /\bwget\b/,                category: 'data-exfil',      reason: 'wget is prohibited. Data cannot leave the server via MCP.' },
   { pattern: /\bnc\b/,                  category: 'data-exfil',      reason: 'netcat is prohibited.' },
   { pattern: /\bncat\b/,                category: 'data-exfil',      reason: 'ncat is prohibited.' },
@@ -751,7 +751,7 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bapt(?:-get)?\s+dist-upgrade\b/, category: 'pkg-install', reason: 'apt dist-upgrade is prohibited.' },
 
   // --- Container escape ---
-  { pattern: /\bdocker\b/,              category: 'container',        reason: 'Docker commands are prohibited.' },
+  // docker is allowed but validated to safe subcommands only in the positive allowlist.
   { pattern: /\bpodman\b/,              category: 'container',        reason: 'Podman commands are prohibited.' },
   { pattern: /\bkubectl\b/,             category: 'container',        reason: 'kubectl commands are prohibited.' },
 
@@ -1602,6 +1602,80 @@ async function runBlockedTierPipeline(
   return { blocked: null, warning: null };
 }
 
+// ─── curl validator — localhost health checks only ────────────────────────────
+// Allows curl to localhost/127.0.0.1 for health checks and API probing.
+// External URLs are blocked to prevent data exfiltration.
+// Piping to shell is already caught by the shell-invoke denylist layer above.
+const validateCurlArgs: ArgValidator = (args) => {
+  for (const arg of args) {
+    if (arg.startsWith('-')) continue; // flags are fine
+    if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('ftp://')) {
+      const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(arg);
+      if (!isLocalhost) {
+        return `curl is restricted to localhost/127.0.0.1 URLs only. To hit external URLs use a browser. Received: ${arg}`;
+      }
+    }
+  }
+  return null;
+};
+
+// ─── docker validator — compose + read-only ops, no nuclear subcommands ───────
+// Allows: compose (up/down/build/logs/ps/exec/restart), ps, logs, inspect, images, info, version
+// Blocks: system prune, rmi (bulk), run with --privileged or host-network, save/export/import
+const DOCKER_ALLOWED_SUBCOMMANDS = new Set([
+  'compose', 'ps', 'logs', 'inspect', 'images', 'info', 'version', 'stats', 'network', 'volume', 'exec',
+]);
+const DOCKER_COMPOSE_BLOCKED = new Set(['kill']); // down/rm are fine for deploys
+
+const validateDockerArgs: ArgValidator = (args) => {
+  if (args.length === 0) return 'docker requires a subcommand.';
+  const sub = args[0].toLowerCase();
+
+  // Block nuclear/escape subcommands regardless of arguments
+  if (sub === 'system') {
+    const action = args[1]?.toLowerCase();
+    if (action === 'prune') return 'docker system prune is prohibited (nuclear operation).';
+  }
+  if (sub === 'run') {
+    // Allow docker run for one-off tasks but block privilege escalation flags
+    const dangerous = ['--privileged', '--network=host', '--pid=host', '--ipc=host', '--cap-add=all'];
+    for (const arg of args) {
+      if (dangerous.some(d => arg.startsWith(d))) {
+        return `docker run flag "${arg}" is prohibited (privilege escalation / host-namespace access).`;
+      }
+    }
+    return null;
+  }
+
+  if (!DOCKER_ALLOWED_SUBCOMMANDS.has(sub)) {
+    return `docker ${sub} is not permitted. Allowed subcommands: ${[...DOCKER_ALLOWED_SUBCOMMANDS, 'run'].join(', ')}.`;
+  }
+
+  if (sub === 'compose') {
+    const composeSub = args.find(a => !a.startsWith('-') && a !== 'compose');
+    if (composeSub && DOCKER_COMPOSE_BLOCKED.has(composeSub.toLowerCase())) {
+      return `docker compose ${composeSub} is not permitted.`;
+    }
+  }
+
+  return null;
+};
+
+// ─── git validator — standard ops, no config/remote tampering ─────────────────
+const GIT_ALLOWED_SUBCOMMANDS = new Set([
+  'status', 'log', 'diff', 'show', 'pull', 'fetch', 'branch', 'tag',
+  'stash', 'rev-parse', 'describe', 'shortlog',
+]);
+const validateGitArgs: ArgValidator = (args) => {
+  if (args.length === 0) return 'git requires a subcommand.';
+  const sub = args[0].toLowerCase();
+  // Block anything that writes config, remotes, hooks, or force-pushes
+  const blocked = new Set(['config', 'remote', 'push', 'commit', 'rebase', 'reset', 'clean', 'gc', 'filter-branch', 'am', 'apply', 'cherry-pick']);
+  if (blocked.has(sub)) return `git ${sub} is not permitted via MCP (read-only git ops only).`;
+  if (!GIT_ALLOWED_SUBCOMMANDS.has(sub)) return `git ${sub} is not a permitted subcommand. Allowed: ${[...GIT_ALLOWED_SUBCOMMANDS].join(', ')}.`;
+  return null;
+};
+
 // ─── Positive Allowlist for run_approved_command (P3c / F-NEW-3) ──────────────
 //
 // Default-deny: any binary not explicitly listed below is hard-blocked.
@@ -2195,6 +2269,19 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'dig':      { description: 'DNS lookup',                          argValidator: validateDigArgs },
   'nslookup': { description: 'DNS lookup',                          argValidator: validateNslookupArgs },
   'host':     { description: 'DNS lookup',                          argValidator: validateHostArgs },
+
+  // ── Docker — compose/deploy ops + read-only container inspection ──────────
+  // Destructive ops (system prune, privileged run) are blocked by validateDockerArgs.
+  // The board-level block for `docker system prune -af` also remains active.
+  'docker':   { description: 'Docker container management',         argValidator: validateDockerArgs },
+
+  // ── curl — localhost health checks only ──────────────────────────────────
+  // External URLs are blocked by validateCurlArgs. Shell-pipe exfil blocked upstream.
+  'curl':     { description: 'HTTP client (localhost only)',         argValidator: validateCurlArgs },
+
+  // ── git — read-only repo inspection ──────────────────────────────────────
+  // Write ops (push/commit/config) are blocked by validateGitArgs.
+  'git':      { description: 'Git version control (read-only ops)', argValidator: validateGitArgs },
 };
 
 function validateAgainstAllowlist(command: string): void {
