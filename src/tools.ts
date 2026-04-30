@@ -2834,7 +2834,7 @@ async function deployVpsMcp(dryRun: boolean, description: string, confirm: boole
     { label: 'git pull origin main', cmd: 'git', args: ['-C', VPS_MCP_DIR, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'] },
     { label: 'npm install --include=dev', cmd: 'npm', args: ['install', '--include=dev'], cwd: VPS_MCP_DIR },
     { label: 'npm run build',        cmd: 'npm', args: ['run', 'build'],  cwd: VPS_MCP_DIR            },
-    { label: 'pm2 restart vps-mcp', cmd: 'pm2', args: ['restart', 'vps-mcp']                         },
+    { label: 'pm2 restart vps-mcp --update-env', cmd: 'pm2', args: ['restart', 'vps-mcp', '--update-env']                         },
     { label: 'pm2 status',           cmd: 'pm2', args: ['status']                                     },
   ];
 
