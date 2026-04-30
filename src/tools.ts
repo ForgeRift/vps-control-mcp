@@ -2759,7 +2759,7 @@ async function deployApp(dryRun: boolean, description: string, confirm: boolean)
     { label: 'git pull origin main', cmd: 'git',  args: ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'] },
     { label: 'pnpm install',         cmd: 'pnpm', args: ['install'],     cwd: CONFIG.APP_DIR            },
     { label: 'node build.mjs',       cmd: 'node', args: ['build.mjs'],   cwd: apiServerDir              },
-    { label: 'pm2 restart all',      cmd: 'pm2',  args: ['restart', 'all']                              },
+    { label: 'pm2 restart sharpedge-api', cmd: 'pm2',  args: ['restart', 'sharpedge-api']                              },
     { label: 'pm2 status',           cmd: 'pm2',  args: ['status']                                      },
   ];
 
@@ -3109,7 +3109,7 @@ export const TOOLS = [
   {
     name: 'deploy',
     annotations: { title: 'Deploy Application', readOnlyHint: false, destructiveHint: true },
-    description: 'Deploy the configured application at APP_DIR on this VM. Runs: git pull → pnpm install → node build.mjs → pm2 restart all → pm2 status. Works on any cloud VM (AWS, GCP, Azure, DigitalOcean, self-hosted). Always dry_run=true first to preview. USE THIS — never ask the user to run deploy commands themselves one-by-one. After a successful deploy, call get_recent_errors to catch build-time failures early.',
+    description: 'Deploy the configured application at APP_DIR on this VM. Runs: git pull -> pnpm install -> node build.mjs -> pm2 restart sharpedge-api -> pm2 status. Works on any cloud VM (AWS, GCP, Azure, DigitalOcean, self-hosted). Always dry_run=true first to preview. USE THIS — never ask the user to run deploy commands themselves one-by-one. After a successful deploy, call get_recent_errors to catch build-time failures early.',
     inputSchema: {
       type: 'object',
       properties: {
