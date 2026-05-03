@@ -406,11 +406,89 @@ async function getJobStatus(jobId: string): Promise<string> {
 
 // ─── Output Safety ────────────────────────────────────────────────────────────
 
+// Output-side secret scrubbing — ported from local-terminal-mcp
+// (lines 1541-1605 there) for parity. POSTURE/WHITEPAPER promise that
+// stdout/stderr is run through scrubSecrets() before being returned to the
+// model; truncate() applies this to every output path on the read side
+// (PM2 logs, git output, command output, etc.). Audit-arg redaction in
+// audit.ts is independent and continues to apply to the args field.
+//
+// Patterns cover well-known SaaS API key shapes, AWS/STS access keys,
+// PEM-armored private keys, and high-entropy base64 blobs (>=80 chars,
+// the same threshold LT uses to keep false-positives low). Order doesn't
+// matter — every pattern runs against the still-redacted-from-prior-passes
+// string, and matches collapse to a literal "[REDACTED]".
+const SECRET_OUTPUT_PATTERNS: RegExp[] = [
+  // GitHub
+  /ghp_[A-Za-z0-9]{36,}/g,
+  /ghs_[A-Za-z0-9]{36,}/g,
+  /gho_[A-Za-z0-9]{36,}/g,
+  // OpenAI
+  /sk-[A-Za-z0-9]{40,}/g,
+  // Anthropic
+  /sk-ant-[A-Za-z0-9\-_]{80,}/g,
+  // AWS
+  /AKIA[0-9A-Z]{16}/g,
+  /ASIA[0-9A-Z]{16}/g,
+  // Slack
+  /xox[baprs]-[A-Za-z0-9\-]{20,}/g,
+  /xapp-[A-Za-z0-9\-]{20,}/g,
+  // GitLab
+  /glpat-[A-Za-z0-9_\-]{20,}/g,
+  /glptt-[A-Za-z0-9_\-]{20,}/g,
+  /glsoat-[A-Za-z0-9_\-]{20,}/g,
+  /glrt-[A-Za-z0-9_\-]{20,}/g,
+  /gldt-[A-Za-z0-9_\-]{20,}/g,
+  // Stripe
+  /sk_live_[A-Za-z0-9]{24,}/g,
+  /sk_test_[A-Za-z0-9]{24,}/g,
+  /rk_live_[A-Za-z0-9]{24,}/g,
+  /rk_test_[A-Za-z0-9]{24,}/g,
+  /whsec_[A-Za-z0-9]{24,}/g,
+  // Twilio
+  /AC[a-f0-9]{32}/g,
+  /SK[a-f0-9]{32}/g,
+  // SendGrid
+  /SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}/g,
+  // npm
+  /npm_[A-Za-z0-9]{36,}/g,
+  // Atlassian
+  /ATATT3xFfGF0[A-Za-z0-9_\-=]{20,}/g,
+  // DigitalOcean
+  /dop_v1_[a-f0-9]{64}/g,
+  /doo_v1_[a-f0-9]{64}/g,
+  /dor_v1_[a-f0-9]{64}/g,
+  // Docker Hub
+  /dckr_pat_[A-Za-z0-9_\-]{27,}/g,
+  // Square
+  /EAAA[A-Za-z0-9_\-]{60,}/g,
+  // Mailgun
+  /key-[a-f0-9]{32}/g,
+  // Google API
+  /AIza[A-Za-z0-9_\-]{35}/g,
+  // PEM private keys (any flavour)
+  /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g,
+  // High-entropy base64 (>=80 chars, terminated by whitespace or end)
+  /[A-Za-z0-9+/]{80,}={0,2}(?=\s|$)/g,
+];
+
+export function scrubSecrets(output: string): string {
+  let scrubbed = output;
+  for (const pattern of SECRET_OUTPUT_PATTERNS) {
+    scrubbed = scrubbed.replace(pattern, '[REDACTED]');
+  }
+  return scrubbed;
+}
+
 function truncate(output: string): string {
-  if (output.length <= CONFIG.MAX_OUTPUT_CHARS) return output;
+  // Apply secret-shape redaction before the size cap so a secret that
+  // straddles the cut point is still redacted (and so we never log a
+  // partial secret in the [TRUNCATED] tail).
+  const scrubbed = scrubSecrets(output);
+  if (scrubbed.length <= CONFIG.MAX_OUTPUT_CHARS) return scrubbed;
   return (
-    output.slice(0, CONFIG.MAX_OUTPUT_CHARS) +
-    `\n\n[TRUNCATED — ${output.length} chars total. Only first ${CONFIG.MAX_OUTPUT_CHARS} shown. Refine your query to narrow results.]`
+    scrubbed.slice(0, CONFIG.MAX_OUTPUT_CHARS) +
+    `\n\n[TRUNCATED — ${scrubbed.length} chars total. Only first ${CONFIG.MAX_OUTPUT_CHARS} shown. Refine your query to narrow results.]`
   );
 }
 

@@ -211,9 +211,10 @@ external. The only outbound HTTP it makes is the validation call to
 `payments.forgerift.io`, and that carries only the license key, the
 double-hashed machine id, the product id, and the plugin version.
 
-Audit logs are local: a JSONL file at
-`\` (default `/var/log/vps-control-mcp/audit.log`,
-sensible default created on first start). Per-field arg capture caps
+Audit logs are local: a JSONL file at the path resolved by
+`CONFIG.AUDIT_LOG_PATH` (default `/var/log/vps-control-mcp/audit.log`,
+overridable via the `AUDIT_LOG_PATH` env var; the directory is
+created on first start). Per-field arg capture caps
 (per F-S67-54) preserve more forensic detail than the legacy flat
 truncation. Operator can ship them off-machine via their own log-
 collection setup if desired; the plugin doesn't.
