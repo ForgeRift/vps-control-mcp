@@ -1778,7 +1778,11 @@ const validateGitArgs: ArgValidator = (args) => {
   if (args.length === 0) return 'git requires a subcommand.';
   const sub = args[0].toLowerCase();
   // Block anything that writes config, remotes, hooks, or force-pushes
-  const blocked = new Set(['config', 'remote', 'push', 'commit', 'rebase', 'reset', 'clean', 'gc', 'filter-branch', 'am', 'apply', 'cherry-pick']);
+  // NF-S69-6: pull/fetch blocked here so users go through the structured git_pull tool
+  // which injects GIT_HARDENING_FLAGS (core.sshCommand, core.editor, protocol.ext.allow, etc).
+  // run_approved_command bypasses those flags, so an attacker-controlled .git/config
+  // could weaponise a pull. fetch is also caught by RED pattern but listed here for symmetry.
+  const blocked = new Set(['config', 'remote', 'push', 'commit', 'rebase', 'reset', 'clean', 'gc', 'filter-branch', 'am', 'apply', 'cherry-pick', 'pull', 'fetch']);
   if (blocked.has(sub)) return `git ${sub} is not permitted via MCP (read-only git ops only).`;
   if (!GIT_ALLOWED_SUBCOMMANDS.has(sub)) return `git ${sub} is not a permitted subcommand. Allowed: ${[...GIT_ALLOWED_SUBCOMMANDS].join(', ')}.`;
   return null;

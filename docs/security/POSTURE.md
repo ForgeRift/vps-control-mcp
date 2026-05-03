@@ -24,6 +24,7 @@ plugin is published as an `.mcpb` archive built from this repo's
 | NF-S69-2 | MAJOR | fixed `c16f2ec` | docs | README claimed "cryptographic audit trails" (audit.ts has no crypto) and RED-tier "no override possible" (BYPASS_BINARIES env exists). Wording corrected |
 | NF-S69-3 | MAJOR | fixed `c16f2ec` | config | `src/config.ts` ALLOWED_PROCESSES default fallback was `['sharpedge-api','vps-mcp','forgerift-payments']` while comment + README claimed empty. Default emptied |
 | NF-S69-4 | MINOR | fixed `c16f2ec` | docs | WHITEPAPER §"Data handling" outbound HTTP claim corrected (Supabase + api.anthropic.com, not payments.forgerift.io); audit log default path corrected to `${APP_DIR}/mcp-audit.log`; README version badge bumped to 1.13.2 |
+| NF-S69-6 | MAJOR | fixed `<v1.13.4>` | run_approved_command / git | `validateGitArgs` allowed `git pull` / `git fetch` via escape hatch, but `run_approved_command` dispatch skipped GIT_HARDENING_FLAGS that the structured `git_pull` tool injects. Asymmetry let user-supplied `git pull` honour attacker-controlled local `.git/config` (core.sshCommand, etc). Same family as F010. Now blocked in `validateGitArgs`; structured `git_pull` remains the supported path |
 
 The audit's other findings (F001-F009, F012, F013) sit on
 `forgerift-license-api` or `local-terminal-mcp`; they're tracked in
@@ -118,6 +119,21 @@ commit `c16f2ec`.
 `npm test` 593/593 still pass. No code-behavior change for healthy
 installs.
 
+### NF-S69-6 close-out (v1.13.4)
+
+Independent line-by-line audit of `src/tools.ts` after the doc-drift
+sweep surfaced a defense-in-depth gap. The structured git tools all
+inject `GIT_HARDENING_FLAGS` (10 `-c key=value` overrides for
+`core.sshCommand`, `core.editor`, `core.pager`, `core.askpass`,
+`credential.helper`, `protocol.ext.allow`, `protocol.file.allow`,
+`core.fsmonitor`, `core.hooksPath`, `uploadpack.packObjectsHook`).
+The escape-hatch `run_approved_command` path dispatches via
+`exec(cmd, args)` with no flag injection -- so `git pull` via the
+escape hatch ran unhardened, honouring whatever the local
+`.git/config` carried for those keys. `validateGitArgs` now adds
+`pull` and `fetch` to its `blocked` Set, forcing users through the
+structured `git_pull` tool. `npm test` 593/593 pass.
+
 ## Command-execution model
 
 `vps-control-mcp` runs every shell command through the same three-
@@ -204,6 +220,6 @@ new `curl arg gate` describe block introduced by the F010 fix.
 
 - All findings owned by this repo are fixed.
 - Central `findings.csv` has zero `open-needs-dustin` rows.
-- `security:` commits pushed to `origin/main`: `bba65f6` (F010 + F011), `c16f2ec` (NF-S69 doc/config drift cleanup, 2026-05-03 evening).
+- `security:` commits pushed to `origin/main`: `bba65f6` (F010 + F011), `c16f2ec` (NF-S69 doc/config drift cleanup), and `<NF-S69-6 commit>` (NF-S69-6 git pull/fetch hardening, v1.13.4).
 - POSTURE + WHITEPAPER in place.
 - `npm test` 593/593 pass on `HEAD`.

@@ -5,6 +5,36 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.13.4] - 2026-05-03
+
+Independent line-by-line audit of `src/tools.ts` after 1.13.3 surfaced
+a defense-in-depth gap. Closed in this release.
+
+### Security
+
+- **NF-S69-6** -- `validateGitArgs` now blocks `git pull` and `git fetch`
+  via `run_approved_command`. Background: every structured git tool
+  (`git_status`, `git_log`, `git_pull`, `git_push`, `deploy`,
+  `deploy_vps_mcp`) injects `GIT_HARDENING_FLAGS` -- 10 `-c key=value`
+  overrides covering `core.sshCommand`, `core.editor`, `core.pager`,
+  `core.askpass`, `credential.helper`, `protocol.ext.allow`,
+  `protocol.file.allow`, `core.fsmonitor`, `core.hooksPath`, and
+  `uploadpack.packObjectsHook`. The escape-hatch `run_approved_command`
+  path (line 2834) does `exec(cmd, args)` directly with no flag
+  injection. So `git pull` via the escape hatch was running
+  unhardened, honouring whatever the local `.git/config` contained for
+  those keys. Same family as F010 (per-binary validator gap that a
+  chained primitive could weaponise into RCE). Customers who
+  legitimately need `git pull` already have the structured `git_pull`
+  tool, which carries the hardening. `fetch` was already caught by a
+  RED pattern (`/\bgit\s+fetch\b/`) but is listed in the validator's
+  `blocked` Set for symmetry with `pull`.
+
+### Tests
+
+- `npm test` 593/593 pass. No behaviour change for healthy installs;
+  only the escape-hatch path that was running unhardened is now
+  redirected to the structured tool.
 ## [1.13.3] - 2026-05-03
 
 Independent reviewer pass after 1.13.2 surfaced four post-audit
