@@ -1,6 +1,6 @@
 {
   "name": "vps-control",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "Connect Claude to your remote Linux VPS with enterprise-grade security. Three-tier command model (RED/AMBER/GREEN) with 275+ hard-blocked patterns/43 categories, sensitive file protection, Supabase token authentication, and full audit logging. Manage PM2 processes, deploy code, inspect logs, and run approved commands — all from Cowork.",
   "author": {
     "name": "ForgeRift LLC",
