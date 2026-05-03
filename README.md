@@ -1,6 +1,6 @@
-﻿# vps-control-mcp
+# vps-control-mcp
 
-[![Version](https://img.shields.io/badge/version-1.12.0-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
+[![Version](https://img.shields.io/badge/version-1.13.2-blue.svg)](https://github.com/ForgeRift/vps-control-mcp)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
@@ -16,7 +16,7 @@ vps-control-mcp is a production-grade MCP server that exposes **17** structured 
 
 - **Deploy applications** via PM2 with automatic rollback on build failure
 - **Monitor processes** and tail error logs in real-time  
-- **Execute server commands** with cryptographic audit trails and hard-blocked patterns
+- **Execute server commands** with audit logging and hard-blocked patterns
 - **Manage git operations** safely across your repositories
 - **Read files** from whitelisted directories with sensitive-file protection
 
@@ -32,7 +32,7 @@ Three-tier access control prevents unauthorized operations:
 
 | Tier | Behavior | Examples |
 |------|----------|----------|
-| **RED (Blocked)** | Cryptographically forbidden—no override possible | File deletion, reboot, user management, shell invocation, all exfiltration (curl/wget/scp/ssh/rsync) |
+| **RED (Blocked)** | Hard-blocked by static pattern; auditable opt-out via `BYPASS_BINARIES` env (logged as `[SECURITY-BYPASS]`) | File deletion, reboot, user management, shell invocation, all exfiltration (curl/wget/scp/ssh/rsync) |
 | **AMBER (Warning)** | Requires dry-run first; ToS warning | apt-get update, xargs, pm2 reload |
 | **GREEN (Allowed)** | Permitted; subject to rate limits and audit logging | ls, cat, npm run, git push, pm2 restart |
 

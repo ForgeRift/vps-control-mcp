@@ -95,7 +95,7 @@ export const CONFIG = {
   // e.g. ALLOWED_PROCESSES=my-api,my-worker
   // Default is empty: restart_process / get_pm2_status are no-ops until configured,
   // so there is no implicit allowlist that might match an unrelated process on this host.
-  ALLOWED_PROCESSES: parseProcessList(process.env.ALLOWED_PROCESSES, ['sharpedge-api', 'vps-mcp', 'forgerift-payments']),
+  ALLOWED_PROCESSES: parseProcessList(process.env.ALLOWED_PROCESSES, []),
 };
 
 // Derived — do not edit directly

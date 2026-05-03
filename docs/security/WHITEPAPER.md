@@ -165,54 +165,91 @@ confirmation. The rest go through
 
 ## Authentication / licensing
 
-On startup, the plugin reads `VPS_LICENSE_KEY` from env and POSTs to
-`https://payments.forgerift.io/validate` with:
+The VPS plugin uses a different licensing model from `local-terminal-mcp`.
+LT runs as a stdio MCP child process spawned by Claude Desktop and
+validates its license once on startup against the central Worker. VPS
+runs as a long-lived HTTP server on the customer's VPS and validates
+each incoming MCP request against either Supabase or a single
+configured token.
 
-```json
-{
-  "license_key":     "FRFT-XXXX-XXXX-XXXX-XXXX",
-  "machine_id":      "<sha256 of /etc/machine-id>",
-  "product_id":      "<vps-control-mcp Stripe product id>",
-  "plugin_version":  "1.13.0"
-}
-```
+### Auth modes
 
-The Worker hashes the key once more, looks up the license, then calls
-the `register_activation_with_cap` Postgres proc which atomically:
+Two modes, selected automatically by which env vars are present at
+startup:
 
-  - checks status (active / past_due tolerated within grace,
-    expired / revoked rejected),
-  - checks the product_id binding (NULL on the row = permissive,
-    enabling Bundle subscriptions to satisfy both plugins),
-  - checks the per-machine activation cap (default max=1; first machine
-    "wins" the slot until the operator deactivates it),
-  - registers the activation if needed, increments the counter,
-  - returns `ok` / `already_active` / `deactivated` /
-    `cap_exceeded` / `product_mismatch`.
+  - **Supabase multi-token mode** (when both `SUPABASE_URL` and
+    `SUPABASE_SERVICE_KEY` are set). Per-request: the bearer token
+    presented by the client is looked up in the `customers` table; the
+    row must have `status IN ('active','trial','grace')` and
+    `plan IN ('vps-control','bundle')`, and any non-NULL `expires_at`
+    must be in the future. A 5-minute positive-result cache plus a
+    30-minute negative-result cache fronts Supabase to bound the
+    per-minute call rate (F-OP-23). A circuit breaker opens after
+    `SUPABASE_CIRCUIT_THRESHOLD` (default 120) cache-misses per minute
+    and short-circuits new lookups to deny until the window rolls
+    (F-OP-36). This is the marketplace billing path.
+  - **Single-token mode** (when Supabase env vars are absent and
+    `MCP_AUTH_TOKEN` is set). Per-request: the bearer token is
+    constant-time-compared (`timingSafeEqual` on equal-length
+    zero-padded buffers, F-S67-53) against the configured token. Used
+    for self-hosted / dev installs that do not connect to ForgeRift's
+    billing backend.
 
-If validation fails the plugin exits with a clear error message
-pointing the user at `forgerift.io` to manage their subscription.
-The plugin never serves any tools to Claude before validation
-succeeds.
+Either mode rejects the request before any tool is dispatched. Tokens
+are also pre-screened by shape (length 16-512, printable ASCII only)
+before any Supabase round-trip, to prevent random-token floods from
+exhausting the Supabase quota (F-OP-23).
 
-### Machine fingerprint
+### OAuth 2.0 + PKCE
 
-The fingerprint is `SHA-256(/etc/machine-id)`. `machine-id` is the
-canonical per-VM stable identifier on systemd-based distros; on systems
-without it the plugin reads
-`/var/lib/dbus/machine-id` then falls back to a fail-closed error
-(no hostname fallback — the per-machine cap can't be defeated by a
-stable cross-machine fingerprint).
+For Cowork and other spec-compliant MCP clients, the plugin advertises
+OAuth 2.0 discovery at `/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource`, with `/authorize` and
+`/token` endpoints implementing PKCE (mandatory at `/authorize` per
+F-OP-35 / F-NEW-6 / F-OP-26). A successful PKCE exchange mints a
+per-session access token with a configurable TTL; that session token is
+checked first in `validateAuth` and never reveals the master
+`MCP_AUTH_TOKEN` if leaked.
+
+### What VPS does NOT do today (and why)
+
+For honesty with reviewers and customers: the per-machine activation
+cap and the `register_activation_with_cap` Postgres flow described in
+the family WHITEPAPER and in
+`local-terminal-mcp/docs/security/WHITEPAPER.md` apply to **LT only**.
+VPS does not currently compute a machine fingerprint, does not POST
+to `payments.forgerift.io/validate`, and does not increment the
+per-key activation counter. The two product surfaces have different
+shapes — LT runs as a single-PC stdio plugin where a per-machine cap
+maps cleanly to one user's one PC; VPS is a long-lived HTTP server
+that one customer may legitimately want to reach from multiple
+clients (Cowork, Claude Desktop, a CLI) — so the LT cap design does
+not transplant unchanged.
+
+License-sharing detection on VPS today depends on the operator-side
+review of the per-request audit log plus rotation of
+`customers.token`, not on the cron-driven five-distinct-machine alert
+that fires for LT. Migrating VPS onto the same
+`register_activation_with_cap` contract (parameterised so a single
+license can authorise N concurrent VPS clients) is on the
+post-marketplace roadmap.
+
+If validation fails, the request returns `401 Unauthorized`, or `503
+Service Unavailable` when the Supabase circuit breaker is open. No
+tool is ever dispatched on a failed auth.
 
 ## Data handling
 
 The plugin never sends raw shell output, paths, or filenames anywhere
-external. The only outbound HTTP it makes is the validation call to
-`payments.forgerift.io`, and that carries only the license key, the
-double-hashed machine id, the product id, and the plugin version.
+external. The plugin makes outbound HTTP only to Supabase
+(`SUPABASE_URL`) for per-request token lookup in Supabase mode, and
+to `api.anthropic.com` for Layer 2 / Layer 3 AI safety classification
+when `ANTHROPIC_API_KEY` is configured. Both endpoints are caller-
+configurable and a self-hosted single-token deploy that omits both
+makes no outbound HTTP at all.
 
 Audit logs are local: a JSONL file at the path resolved by
-`CONFIG.AUDIT_LOG_PATH` (default `/var/log/vps-control-mcp/audit.log`,
+`CONFIG.AUDIT_LOG_PATH` (default `${APP_DIR}/mcp-audit.log` — kept inside `APP_DIR` so `read_file_section` can access it without extra allowlist config,
 overridable via the `AUDIT_LOG_PATH` env var; the directory is
 created on first start). Per-field arg capture caps
 (per F-S67-54) preserve more forensic detail than the legacy flat
