@@ -38,7 +38,7 @@ Three-tier access control prevents unauthorized operations:
 
 Additionally:
 - Sensitive files (.env, .ssh/, credentials) are blocked from all read operations, even within allowed directories
-- 275+ hard-blocked patterns across 43 security categories
+- 275+ hard-blocked patterns across 44 security categories
 - Request timeouts prevent runaway processes
 - Audit log with automatic 10MB rotation and secret redaction
 

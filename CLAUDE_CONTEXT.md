@@ -20,7 +20,7 @@ When this document is loaded, treat yourself as the user's expert assistant for 
 **vps-control-mcp** gives Claude a secure, audited connection to a Linux VPS. It runs as a Node.js process on your server, exposes 17 structured tools over HTTPS, and enforces a three-tier security model that hard-blocks dangerous operations at the code level — before any AI review.
 
 **Built by:** ForgeRift LLC  
-**Version:** 1.12.0  
+**Version:** 1.13.2  
 **License:** BUSL 1.1 (converts to MIT 4 years from each version's release date; see CHANGELOG.md)  
 **Docs:** github.com/ForgeRift/vps-control-mcp
 
@@ -113,8 +113,8 @@ Legitimate but potentially dangerous. Layer 3 reads the full conversation contex
 
 **How to help Layer 3 approve:** Give context before the command. "I'm deploying v1.2 of my API and need to restart nginx" works far better than issuing a cold restart.
 
-### 🔴 RED — Always Blocked, No Override
-Hard-coded in source. The AI safety layer is never consulted. Offer to write the manual SSH equivalent and walk the user through it step by step.
+### RED â€” Always Blocked Without an Audited Opt-Out
+Hard-coded in source. The AI safety layer is never consulted. Offer to write the manual SSH equivalent and walk the user through it step by step. (Operators with a justified workflow can demote a specific binary via the `BYPASS_BINARIES` env var; every use is logged as `[SECURITY-BYPASS]`.)
 
 **Permanently blocked:**
 - `rm -rf /` or recursive deletion targeting home/root/system paths

@@ -1,10 +1,61 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to vps-control-mcp.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.13.3] - 2026-05-03
+
+Independent reviewer pass after 1.13.2 surfaced four post-audit
+documentation/config drifts. None were active code-path security
+regressions. Closed in commit `c16f2ec`. No release archive bump --
+all changes are doc + config-default.
+
+### Documentation
+
+- **NF-S69-1** -- `docs/security/WHITEPAPER.md` Â§"Authentication /
+  licensing" rewritten. Prior version mirrored the LT POSTURE shape
+  (POST to `payments.forgerift.io` with machine_id + product_id,
+  calls `register_activation_with_cap`, enforces per-machine cap).
+  `src/auth.ts` does none of that -- it does per-request token
+  lookup against Supabase `customers` with a plan-based check, with
+  OAuth 2.0 + PKCE on top. New "What VPS does NOT do today"
+  subsection explicitly notes the per-machine cap is LT-only with
+  VPS migration tracked as post-marketplace roadmap.
+- **NF-S69-2** -- `README.md` "cryptographic audit trails"
+  overstatement removed (`src/audit.ts` has no crypto). RED-tier
+  table row "no override possible" replaced with accurate
+  "auditable opt-out via `BYPASS_BINARIES` env (logged as
+  `[SECURITY-BYPASS]`)" -- the prior wording contradicted the same
+  README's config table.
+- **NF-S69-4** -- `docs/security/WHITEPAPER.md` Â§"Data handling"
+  outbound HTTP claim corrected (Supabase + `api.anthropic.com`,
+  not `payments.forgerift.io` -- VPS never makes that call). Audit
+  log default path corrected to `${APP_DIR}/mcp-audit.log` to match
+  `config.ts:84`. README version badge bumped 1.12.0 -> 1.13.2 to
+  match `package.json`.
+- `MARKETPLACE_LISTING.md` "no prompt can override them" overstatement
+  loosened to mention `BYPASS_BINARIES`. ALLOWED_PROCESSES default
+  in config table changed from `vps-mcp` to `(empty)`.
+- `SECURITY.md` "Process Log Access Gating" default `vps-mcp` ->
+  `empty`. README + SECURITY category count synced 43 -> 44.
+- `CLAUDE_CONTEXT.md` version 1.12.0 -> 1.13.2; RED-tier "No
+  Override" header rephrased to acknowledge BYPASS_BINARIES.
+
+### Config
+
+- **NF-S69-3** -- `src/config.ts` `ALLOWED_PROCESSES` default
+  fallback changed from `['sharpedge-api', 'vps-mcp',
+  'forgerift-payments']` to `[]`. The in-code comment already
+  claimed the default was empty; this was a code/comment drift in
+  addition to a leak of the operator's personal process names to
+  marketplace customers.
+
+### Tests
+
+- `npm test` 593/593 still pass. No code-behavior change for
+  healthy installs.
 ## [1.13.2] - 2026-05-03
 
 Opus pre-marketplace review close-out. Two findings on top of 1.13.1:

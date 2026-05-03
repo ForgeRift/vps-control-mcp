@@ -20,6 +20,10 @@ plugin is published as an `.mcpb` archive built from this repo's
 |---|---|---|---|---|
 | F010 | MAJOR | fixed `bba65f6` | curl gate | `--url=URL` and `--proxy=URL` bypassed the localhost-only curl restriction, enabling exfil to any external URL |
 | F011 | MINOR | fixed `bba65f6` | tests | Two stale curl tests had been failing on every `npm test` run because the implementation had carved curl out for localhost health checks |
+| NF-S69-1 | MAJOR | fixed `c16f2ec` | docs | WHITEPAPER §"Authentication / licensing" claimed VPS POSTs to payments.forgerift.io with machine_id + product_id; code uses Supabase customers-table per-request token lookup. Section rewritten + new "What VPS does NOT do today" subsection (per-machine cap is LT-only, on roadmap) |
+| NF-S69-2 | MAJOR | fixed `c16f2ec` | docs | README claimed "cryptographic audit trails" (audit.ts has no crypto) and RED-tier "no override possible" (BYPASS_BINARIES env exists). Wording corrected |
+| NF-S69-3 | MAJOR | fixed `c16f2ec` | config | `src/config.ts` ALLOWED_PROCESSES default fallback was `['sharpedge-api','vps-mcp','forgerift-payments']` while comment + README claimed empty. Default emptied |
+| NF-S69-4 | MINOR | fixed `c16f2ec` | docs | WHITEPAPER §"Data handling" outbound HTTP claim corrected (Supabase + api.anthropic.com, not payments.forgerift.io); audit log default path corrected to `${APP_DIR}/mcp-audit.log`; README version badge bumped to 1.13.2 |
 
 The audit's other findings (F001-F009, F012, F013) sit on
 `forgerift-license-api` or `local-terminal-mcp`; they're tracked in
@@ -72,6 +76,47 @@ the audit. Refreshed alongside the F010 fix; `npm test` now passes
 with no skipped or failing cases (562/562 pre-F010, 591/593 —>
 593/593 post-F010 with the new `curl arg gate` describe block adding
 9 cases).
+
+## Post-audit drift cleanup (2026-05-03 evening)
+
+Independent reviewer pass after F010/F011 surfaced four documentation
+or config drifts in this repo. None were active code-path security
+regressions; they were claims in customer-facing docs that did not
+match what the code did, plus one config-default leak. Closed in
+commit `c16f2ec`.
+
+  - **NF-S69-1** -- WHITEPAPER §"Authentication / licensing" was
+    written to mirror the LT POSTURE shape (POST to
+    payments.forgerift.io with machine_id + product_id, calls
+    `register_activation_with_cap`, enforces per-machine cap).
+    `vps-control-mcp/src/auth.ts` does none of that -- it does
+    per-request token lookup against Supabase `customers` with a
+    plan-based check, with OAuth 2.0 + PKCE on top. Section
+    rewritten. New "What VPS does NOT do today" subsection
+    explicitly notes the per-machine cap is LT-only with VPS
+    migration tracked as post-marketplace roadmap.
+  - **NF-S69-2** -- README "cryptographic audit trails" overstatement
+    removed (`src/audit.ts` has no crypto/HMAC, only secret-pattern
+    redaction). RED-tier table row "no override possible" replaced
+    with accurate "auditable opt-out via `BYPASS_BINARIES` env
+    (logged as `[SECURITY-BYPASS]`)" -- BYPASS_BINARIES is in the
+    same README's config table, so the prior wording was an
+    intra-document contradiction.
+  - **NF-S69-3** -- `src/config.ts` `ALLOWED_PROCESSES` default
+    fallback emptied (was `['sharpedge-api', 'vps-mcp',
+    'forgerift-payments']` -- the operator's personal process names
+    leaking to every marketplace customer who did not set the env
+    var). The in-code comment already claimed the default was empty,
+    so this was a code/comment drift in addition to the leak.
+  - **NF-S69-4** -- WHITEPAPER §"Data handling" outbound-HTTP claim
+    corrected (Supabase + `api.anthropic.com` per the actual code
+    paths in `auth.ts` + `tools.ts`, not `payments.forgerift.io`
+    which VPS never calls). Audit log default path corrected to
+    `${APP_DIR}/mcp-audit.log` to match `config.ts:84`. README
+    version badge bumped 1.12.0 â†’ 1.13.2 to match `package.json`.
+
+`npm test` 593/593 still pass. No code-behavior change for healthy
+installs.
 
 ## Command-execution model
 
@@ -159,6 +204,6 @@ new `curl arg gate` describe block introduced by the F010 fix.
 
 - All findings owned by this repo are fixed.
 - Central `findings.csv` has zero `open-needs-dustin` rows.
-- `security:` commit pushed to `origin/main`: `bba65f6` (F010 + F011).
+- `security:` commits pushed to `origin/main`: `bba65f6` (F010 + F011), `c16f2ec` (NF-S69 doc/config drift cleanup, 2026-05-03 evening).
 - POSTURE + WHITEPAPER in place.
 - `npm test` 593/593 pass on `HEAD`.

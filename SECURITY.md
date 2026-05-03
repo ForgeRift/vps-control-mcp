@@ -12,7 +12,7 @@ All commands are classified into three security tiers: RED (hard-blocked), AMBER
 
 ### RED Tier: Hard-Blocked Commands
 
-RED tier commands are permanently blocked regardless of context. Attempts to execute RED tier commands fail with a clear error message and are logged as security events. The block list encompasses 275+ patterns across 43 security categories.
+RED tier commands are permanently blocked regardless of context. Attempts to execute RED tier commands fail with a clear error message and are logged as security events. The block list encompasses 275+ patterns across 44 security categories.
 
 **File Deletion & Data Destruction**
 
@@ -90,7 +90,7 @@ Any command that attempts privilege escalation is blocked: `sudo` without passwo
 
 Commands that enumerate sensitive system information are blocked: `cat /etc/shadow`, `getent shadow`, `/proc/[pid]/environ` reading, `/proc/[pid]/fd` enumeration, and other kernel interface exploration. System diagnostics are available only through structured APIs.
 
-**Process Log Access Gating** — `get_recent_errors` and `get_recent_output` (the structured tools for tailing PM2 error and stdout logs) are gated by the `ALLOWED_PROCESSES` environment variable. Only PM2 process names explicitly listed in `ALLOWED_PROCESSES` (comma-separated; default: `vps-mcp`) can have their logs read. This prevents a compromised Claude session from reading logs of arbitrary processes not under its operational scope.
+**Process Log Access Gating** -- `get_recent_errors` and `get_recent_output` (the structured tools for tailing PM2 error and stdout logs) are gated by the `ALLOWED_PROCESSES` environment variable. Only PM2 process names explicitly listed in `ALLOWED_PROCESSES` (comma-separated; default: empty -- log-reading tools are no-ops until the operator opts a process in) can have their logs read. This prevents a compromised Claude session from reading logs of arbitrary processes not under its operational scope.
 
 **Command Chaining Exploits**
 
