@@ -1603,16 +1603,46 @@ async function runBlockedTierPipeline(
 }
 
 // ─── curl validator — localhost health checks only ────────────────────────────
-// Allows curl to localhost/127.0.0.1 for health checks and API probing.
+// Allows curl to localhost/127.0.0.1/[::1] for health checks and API probing.
 // External URLs are blocked to prevent data exfiltration.
 // Piping to shell is already caught by the shell-invoke denylist layer above.
+//
+// Bypass-resistance notes:
+//   * `--url=URL`, `--next URL`, `-x URL`, `--proxy URL` etc. all carry URLs in
+//     positional or attached form. Earlier the validator skipped any arg
+//     starting with `-`, which made `curl --url=http://attacker.com` slip past
+//     the localhost gate entirely (S69 audit, 2026-05-03). The fix walks every
+//     arg, normalizes `--key=value` to its value half, and runs the URL check
+//     against any substring that looks like an http/https/ftp URL.
+//   * IPv6 loopback `[::1]` is allowed alongside `localhost` and `127.0.0.1`.
+//   * Match is case-insensitive on host so HTTP://LOCALHOST works.
+const LOCALHOST_URL_RE =
+  /^(?:https?|ftp):\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i;
+const URL_SUBSTRING_RE = /(?:https?|ftp):\/\/[^\s'"]+/gi;
+
 const validateCurlArgs: ArgValidator = (args) => {
-  for (const arg of args) {
-    if (arg.startsWith('-')) continue; // flags are fine
-    if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('ftp://')) {
-      const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(arg);
-      if (!isLocalhost) {
-        return `curl is restricted to localhost/127.0.0.1 URLs only. To hit external URLs use a browser. Received: ${arg}`;
+  for (const rawArg of args) {
+    // Normalize --key=value to value (curl supports both forms via getopt_long).
+    const candidates: string[] = [rawArg];
+    if (rawArg.startsWith('--') && rawArg.includes('=')) {
+      candidates.push(rawArg.slice(rawArg.indexOf('=') + 1));
+    }
+    for (const c of candidates) {
+      // Direct positional URL form.
+      if (/^(?:https?|ftp):\/\//i.test(c)) {
+        if (!LOCALHOST_URL_RE.test(c)) {
+          return `curl is restricted to localhost/127.0.0.1/[::1] URLs only. To hit external URLs use a browser. Received: ${c}`;
+        }
+        continue;
+      }
+      // Embedded URL inside a flag value or composite arg.
+      const matches = c.match(URL_SUBSTRING_RE);
+      if (matches) {
+        for (const url of matches) {
+          if (!LOCALHOST_URL_RE.test(url)) {
+            return `curl is restricted to localhost/127.0.0.1/[::1] URLs only. To hit external URLs use a browser. Received: ${url}`;
+          }
+        }
       }
     }
   }

