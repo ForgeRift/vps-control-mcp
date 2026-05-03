@@ -5,6 +5,37 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.13.2] - 2026-05-03
+
+Opus pre-marketplace review close-out. Two findings on top of 1.13.1:
+
+### Security
+
+- **NF-2 (commit 7d36194)** -- Ported `scrubSecrets()` regex bank
+  from `local-terminal-mcp/src/tools.ts` (lines 1541-1605). The
+  POSTURE/WHITEPAPER docs claimed VPS ran tool stdout/stderr through
+  `scrubSecrets()` before returning to the model; the function did
+  not actually exist in `vps-control-mcp/src/`. `audit.ts` only
+  redacted call args via `sanitizeArgs`, not output. Now `truncate()`
+  applies the regex bank before its size cap, so all 14 existing call
+  sites pick up the redaction with zero per-site change. Patterns
+  cover well-known SaaS API key shapes, AWS/STS access keys,
+  PEM-armored private keys, and high-entropy base64 blobs (>=80
+  chars). Brings VPS to parity with LT.
+
+### Documentation
+
+- **NF-3** -- `docs/security/WHITEPAPER.md` had a leftover
+  backtick-backslash-backtick placeholder where the audit log path
+  variable should be referenced. Replaced with `CONFIG.AUDIT_LOG_PATH`
+  + a note about the `AUDIT_LOG_PATH` env var override.
+
+### Tests
+
+- `npm test` 593/593 pass (no behaviour regression; `scrubSecrets()`
+  is transparent to existing assertions because no fixtures embed
+  real secret-shaped strings).
+
 ## [1.13.1] — 2026-04-27
 
 ### Security — Adversarial Review Round 15 (F-S68-1..F-S68-21) — Remediation Pass
