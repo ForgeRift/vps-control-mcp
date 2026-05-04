@@ -134,6 +134,11 @@ escape hatch ran unhardened, honouring whatever the local
 `pull` and `fetch` to its `blocked` Set, forcing users through the
 structured `git_pull` tool. `npm test` 593/593 pass.
 
+Per-machine activation cap parity with LT (currently LT-only) is
+tracked centrally as **RM-1** in the family-level post-marketplace
+roadmap (``forgerift-license-api/docs/security/POSTURE.md`` Â§"Post-
+marketplace roadmap").
+
 ## Command-execution model
 
 `vps-control-mcp` runs every shell command through the same three-
