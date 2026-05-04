@@ -472,6 +472,16 @@ const SECRET_OUTPUT_PATTERNS: RegExp[] = [
   /[A-Za-z0-9+/]{80,}={0,2}(?=\s|$)/g,
 ];
 
+// F-VPS-NF-S69-8: strip ANSI/terminal escape sequences before any tool output
+// reaches the model. Mirror of LT's stripAnsi (NF-S69-8). Same regex covers
+// CSI cursor + color codes (ESC[...m, ESC[...G/K/H/F/A/B/C/D/J/s/t) and OSC
+// terminal-title / hyperlink sequences (ESC]...BEL). Applied via truncate()
+// which is the chokepoint for all read-side output (PM2 logs, git output,
+// command output, etc.).
+function stripAnsi(output: string): string {
+  return output.replace(/\x1b(?:\[[0-9;]*[mGKHFABCDJst]|\][^\x07]*\x07)/g, '');
+}
+
 export function scrubSecrets(output: string): string {
   let scrubbed = output;
   for (const pattern of SECRET_OUTPUT_PATTERNS) {
@@ -481,10 +491,11 @@ export function scrubSecrets(output: string): string {
 }
 
 function truncate(output: string): string {
-  // Apply secret-shape redaction before the size cap so a secret that
-  // straddles the cut point is still redacted (and so we never log a
-  // partial secret in the [TRUNCATED] tail).
-  const scrubbed = scrubSecrets(output);
+  // Apply ANSI strip + secret-shape redaction before the size cap.
+  // ANSI strip prevents log-injection (NF-S69-8: ESC sequences hiding content
+  // from the human reading rendered output). Secret strip catches API keys /
+  // PEM headers / etc. straddling the size cap.
+  const scrubbed = scrubSecrets(stripAnsi(output));
   if (scrubbed.length <= CONFIG.MAX_OUTPUT_CHARS) return scrubbed;
   return (
     scrubbed.slice(0, CONFIG.MAX_OUTPUT_CHARS) +

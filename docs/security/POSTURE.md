@@ -25,6 +25,7 @@ plugin is published as an `.mcpb` archive built from this repo's
 | NF-S69-3 | MAJOR | fixed `c16f2ec` | config | `src/config.ts` ALLOWED_PROCESSES default fallback was `['sharpedge-api','vps-mcp','forgerift-payments']` while comment + README claimed empty. Default emptied |
 | NF-S69-4 | MINOR | fixed `c16f2ec` | docs | WHITEPAPER §"Data handling" outbound HTTP claim corrected (Supabase + api.anthropic.com, not payments.forgerift.io); audit log default path corrected to `${APP_DIR}/mcp-audit.log`; README version badge bumped to 1.13.2 |
 | NF-S69-6 | MAJOR | fixed `ae9f3be` | run_approved_command / git | `validateGitArgs` allowed `git pull` / `git fetch` via escape hatch, but `run_approved_command` dispatch skipped GIT_HARDENING_FLAGS that the structured `git_pull` tool injects. Asymmetry let user-supplied `git pull` honour attacker-controlled local `.git/config` (core.sshCommand, etc). Same family as F010. Now blocked in `validateGitArgs`; structured `git_pull` remains the supported path |
+| NF-S69-8 | MINOR | fixed `<v1.13.5>` | tools.ts / output | VPS had no ANSI escape stripping at all. New `stripAnsi()` helper integrated into `truncate()` chokepoint so all read-side output paths (PM2 logs, git output, command output, file reads, search results) strip ANSI/CSI/OSC sequences before reaching the model. Mirror of LT NF-S69-8. |
 
 The audit's other findings (F001-F009, F012, F013) sit on
 `forgerift-license-api` or `local-terminal-mcp`; they're tracked in

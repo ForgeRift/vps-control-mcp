@@ -5,6 +5,31 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.13.5] - 2026-05-04 (NF-S69-8 ANSI strip)
+
+Independent reviewer pass after Gemini chat highlighted ANSI escape
+sequence injection as a defense-in-depth gap. Mirror of LT 1.13.3.
+
+### Security
+
+- **NF-S69-8** -- New `stripAnsi()` helper applied at the `truncate()`
+  chokepoint, which means ALL read-side output paths (PM2 logs, git
+  output, command output, file reads, search results) now strip
+  ANSI/CSI/OSC sequences before reaching the model. VPS previously
+  had no ANSI handling at all; this brings it to parity with LT's
+  newly-centralised handling. Pattern same as LT:
+  `\x1b(?:\[[0-9;]*[mGKHFABCDJst]|\][^\x07]*\x07)`.
+
+### Internal
+
+- Version constants synced to 1.13.5 across package.json,
+  .claude-plugin/plugin.json.
+- marketplace.json ref pinned 'v1.13.4' -> 'v1.13.5'.
+
+### Tests
+
+- npm test 593/593 still pass. ANSI codes are not in test fixtures so
+  behaviour is unchanged for normal data.
 ## [1.13.4] - 2026-05-03
 
 Independent line-by-line audit of `src/tools.ts` after 1.13.3 surfaced
