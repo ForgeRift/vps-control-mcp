@@ -47,6 +47,31 @@ Commands that take longer than 30 seconds should use `run_in_background=true`. T
 - **High restart count in PM2:** A large restart count on `vps-mcp` is expected — each `deploy_vps_mcp` call restarts the process. This is not indicative of instability. Concern only if the process is in a crash loop (restart count climbing in real-time with no deploys in progress).
 - **Reconnect prompt after deploy:** Each deploy restarts vps-mcp, which drops the active connection. vps-control-mcp transparently restores the session when a Cowork SSE client reconnects (see CHANGELOG 1.10.7). The "click to reconnect" prompt is a fallback for edge cases where the server cannot be reached at all (TLS expiry, nginx down, port held by a stale process). See the "Click to Reconnect" section at the top of this file for full details.
 
+## Subscription & Billing
+
+### Self-service billing portal
+
+Manage your subscription yourself at:
+
+> **https://billing.stripe.com/p/login/4gMdR91Sg5sgd1ybuE2Ry00**
+
+Enter the email address you used at checkout and Stripe will email you a one-time login link. From the portal you can:
+
+- Cancel your subscription (takes effect at the end of the current billing period — per ToS 14.2 deactivation completes within 24 hours of cancellation)
+- Update your payment method
+- View and download past invoices
+- Update your billing address / customer information
+
+The portal is the fastest path. ``support@forgerift.io`` is the fallback for anything the portal can't do (lost token, account-level questions, billing disputes).
+
+After cancellation, run `uninstall.sh` on your VPS to clean up the local install.
+
+### My card was declined / subscription is past_due
+
+Stripe will retry the charge automatically a few times. During the retry window, validation continues to succeed (``past_due`` is treated as ``active`` by the validation flow as a deliberate grace period). If retries fail, the subscription transitions to ``unpaid`` and per-request validation will start returning 401. To update your card before then, use the self-service portal above.
+
+---
+
 ## Support
 
 - **GitHub Issues:** [github.com/ForgeRift/vps-control-mcp/issues](https://github.com/ForgeRift/vps-control-mcp/issues)
