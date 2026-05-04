@@ -6,6 +6,8 @@
 
 **Tagline:** *Let Claude operate your server. Without the risk.*
 
+*ForgeRift LLC is an independent third-party developer and is not affiliated with, endorsed by, or sponsored by Anthropic PBC.*
+
 You use Claude to write deploy scripts, debug errors, and figure out why your server is slow — but you still have to copy every command into a terminal yourself. vps-control-mcp closes that gap.
 
 Give Claude structured, audited access to your Linux VPS. It can restart your app, tail error logs, run a deploy, check disk and memory, and pull the latest git commits — all from Claude, without you ever opening a terminal.
