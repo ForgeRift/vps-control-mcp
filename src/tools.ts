@@ -1746,6 +1746,58 @@ const DOCKER_ALLOWED_SUBCOMMANDS = new Set([
 ]);
 const DOCKER_COMPOSE_BLOCKED = new Set(['kill']); // down/rm are fine for deploys
 
+// FN-VPS-012 (2026-05): the prior dangerous-flag list missed several flags that
+// individually equal root on the host:
+//   --userns=host           → share host user namespace, container UID 0 == host UID 0
+//   --security-opt=*        → seccomp=unconfined / apparmor=unconfined → kernel surface
+//   --cap-add=SYS_ADMIN     → granular caps; only --cap-add=all was caught
+//   --device=/dev/sda       → direct disk access from container
+//   -v /:/host              → bind mount host root into container
+//   --mount type=bind,source=/etc → equivalent
+// Prefix-match form covers both `--flag=value` and `--flag value` (next arg checked).
+const DOCKER_RUN_DANGEROUS_PREFIXES: ReadonlyArray<string> = [
+  '--privileged',
+  '--network=host', '--net=host',
+  '--pid=host',
+  '--ipc=host',
+  '--uts=host',
+  '--userns=host',
+  '--cap-add',         // ALL granular cap-add forms (=SYS_ADMIN, =all, etc.)
+  '--security-opt',    // seccomp=unconfined / apparmor=unconfined
+  '--device',          // raw device access
+];
+// Two-token forms: `--cap-add SYS_ADMIN`, `--device /dev/sda` etc. We need to
+// flag the FLAG not the value, hence prefix-match on the flag itself above.
+// `--network host` (space form) is also caught because the flag string starts
+// with `--network`, then the next token is `host` — value alone isn't checked.
+function isDockerRunDangerousFlag(arg: string): boolean {
+  for (const p of DOCKER_RUN_DANGEROUS_PREFIXES) {
+    if (arg === p) return true;
+    if (arg.startsWith(p + '=')) return true;
+  }
+  // `--network host`, `--pid host`, etc. — handled by the equality check above
+  // for the next token's flag, but not for the value. Inspect canonical flags
+  // when the value form appears as a separate arg.
+  return false;
+}
+
+// Approve `-v` / `--volume` / `--mount` source paths only when they resolve
+// inside CONFIG.APP_DIR. Named volumes (no leading `/`) are also allowed
+// because they don't expose the host filesystem.
+function validateDockerVolumeSource(rawSource: string): string | null {
+  if (!rawSource) return 'docker volume source is empty.';
+  // Named volume: no leading slash, no separator. Permitted.
+  if (!rawSource.startsWith('/') && !rawSource.startsWith('.')) return null;
+  let resolved: string;
+  try { resolved = path.resolve(rawSource); }
+  catch { return `docker volume source "${rawSource}" could not be resolved.`; }
+  const appDir = path.resolve(CONFIG.APP_DIR);
+  if (resolved !== appDir && !resolved.startsWith(appDir + path.sep)) {
+    return `docker volume source "${rawSource}" is outside APP_DIR (${appDir}).`;
+  }
+  return null;
+}
+
 const validateDockerArgs: ArgValidator = (args) => {
   if (args.length === 0) return 'docker requires a subcommand.';
   const sub = args[0].toLowerCase();
@@ -1756,11 +1808,39 @@ const validateDockerArgs: ArgValidator = (args) => {
     if (action === 'prune') return 'docker system prune is prohibited (nuclear operation).';
   }
   if (sub === 'run') {
-    // Allow docker run for one-off tasks but block privilege escalation flags
-    const dangerous = ['--privileged', '--network=host', '--pid=host', '--ipc=host', '--cap-add=all'];
-    for (const arg of args) {
-      if (dangerous.some(d => arg.startsWith(d))) {
+    // Allow docker run for one-off tasks but block privilege escalation flags.
+    // FN-VPS-012: expanded coverage (was --privileged / --network=host / --pid=host /
+    // --ipc=host / --cap-add=all only) — see DOCKER_RUN_DANGEROUS_PREFIXES.
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (isDockerRunDangerousFlag(arg)) {
         return `docker run flag "${arg}" is prohibited (privilege escalation / host-namespace access).`;
+      }
+      // Volume bind mount: -v src:dst[:opts] or --volume src:dst[:opts].
+      // Value can be in same token (--volume=src:dst) or next token (-v src:dst).
+      if (arg === '-v' || arg === '--volume') {
+        const val = args[i + 1] ?? '';
+        const src = val.split(':')[0];
+        const err = validateDockerVolumeSource(src);
+        if (err) return err;
+      } else if (arg.startsWith('-v=') || arg.startsWith('--volume=')) {
+        const val = arg.slice(arg.indexOf('=') + 1);
+        const src = val.split(':')[0];
+        const err = validateDockerVolumeSource(src);
+        if (err) return err;
+      }
+      // --mount type=bind,source=/etc,target=/host
+      else if (arg === '--mount' || arg.startsWith('--mount=')) {
+        const val = arg === '--mount' ? (args[i + 1] ?? '') : arg.slice('--mount='.length);
+        // Parse source=/src= field. Only bind mounts expose the host fs.
+        const isBind = /(?:^|,)type=bind(?:,|$)/.test(val);
+        if (isBind) {
+          const m = val.match(/(?:^|,)(?:source|src)=([^,]+)/);
+          if (m) {
+            const err = validateDockerVolumeSource(m[1]);
+            if (err) return err;
+          }
+        }
       }
     }
     return null;

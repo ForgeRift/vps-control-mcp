@@ -1482,3 +1482,47 @@ describe('FN-VPS-004 — git diff --no-index is blocked', () => {
   it('still allows git diff --stat', () =>
     assert.doesNotThrow(() => validateAgainstAllowlist('git diff --stat')));
 });
+
+// ─── FN-VPS-012 — docker run dangerous-flag list expansion ────────────────────
+// Prior coverage caught --privileged / --network=host / --pid=host / --ipc=host /
+// --cap-add=all only. Each missing flag is, on its own, equivalent to root on
+// the host: --userns=host, --security-opt seccomp=unconfined, --cap-add=SYS_ADMIN,
+// --device=/dev/sda, -v /:/host. APP_DIR in tests is /tmp/testapp.
+describe('FN-VPS-012 — docker run dangerous flags blocked', () => {
+  for (const cmd of [
+    'docker run --userns=host alpine sh',
+    'docker run --uts=host alpine',
+    'docker run --security-opt=seccomp=unconfined alpine',
+    'docker run --security-opt apparmor=unconfined alpine',
+    'docker run --cap-add=SYS_ADMIN alpine',
+    'docker run --cap-add SYS_PTRACE alpine',
+    'docker run --device=/dev/sda alpine',
+    'docker run --device /dev/mem alpine',
+    'docker run --net=host alpine',
+    // bind-mount source outside APP_DIR
+    'docker run -v /etc:/host alpine cat /host/shadow',
+    'docker run -v /:/host alpine',
+    'docker run --volume=/root/.ssh:/keys alpine',
+    'docker run --volume /var/run/docker.sock:/sock alpine',
+    'docker run --mount type=bind,source=/etc,target=/host alpine',
+    'docker run --mount=type=bind,src=/root,target=/r alpine',
+  ]) {
+    it(`blocks: ${cmd}`, () => {
+      assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+    });
+  }
+
+  // Legitimate uses — no host escalation, no out-of-APP_DIR bind mounts.
+  it('allows docker run with no dangerous flags', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker run --rm alpine echo hi')));
+  it('allows docker run with named volume', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker run -v myvol:/data alpine')));
+  it('allows docker run with bind mount inside APP_DIR', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker run -v /tmp/testapp/data:/data alpine')));
+  it('allows docker run --rm -p 8080:80', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker run --rm -p 8080:80 nginx')));
+  it('still allows docker compose up', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker compose up -d')));
+  it('still allows docker ps', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('docker ps')));
+});
