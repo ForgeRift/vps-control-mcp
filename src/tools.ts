@@ -979,7 +979,11 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bps\b[^|&;]*-[a-zA-Z]*e[a-zA-Z]*o\b/, category: 'info-leak', reason: 'ps -eo (environment output) dumps process environment variables including secrets.' },
 
   // ─── Base64 Decode-to-Exec ───────────────────────────────────────────────────
-  { pattern: /\bbase64\b.*-d\b/,         category: 'base64-exec',     reason: 'base64 -d (decode) is prohibited (obfuscation layer for shell injection).' },
+  // P1.1 (2026-05-04 bypass-review): the prior pattern only caught -d.
+  // GNU coreutils base64 also accepts -D and --decode; busybox accepts
+  // --decode-line. Extend the alternation.
+  { pattern: /\bbase64\b[^|&;\n]*(?:-d\b|-D\b|--decode\b|--decode-line\b)/,
+                                          category: 'base64-exec',     reason: 'base64 -d / -D / --decode / --decode-line is prohibited (obfuscation layer for shell injection).' },
   { pattern: /\bopenssl\s+(?:base64|enc)\b.*-d\b/, category: 'base64-exec', reason: 'openssl base64 decode is prohibited (obfuscation layer).' },
   // ── C5 (S60): Kernel module operations ─────────────────────────────────
   { pattern: /\bmodprobe\b/,              category: 'system-state',    reason: 'Kernel module loading (modprobe) is prohibited (C5).' },

