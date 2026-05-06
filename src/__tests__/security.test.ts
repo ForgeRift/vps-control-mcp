@@ -1586,3 +1586,42 @@ describe('FP-VPS-003 — journalctl per-unit allowlist', () => {
   it('blocks journalctl --root=/tmp', () =>
     assert.throws(() => validateAgainstAllowlist('journalctl --root=/tmp -u nginx'), /BLOCKED \[invalid-args\]/));
 });
+
+// ─── FP-VPS-011 — pipes/redirects emit a clear shell-metachar error ───────────
+// run_approved_command uses execFile (no shell), so '|', '>', '<' tokens
+// reach the binary as literal args. Previously failed with the opaque
+// "File not found: '|'" from validateArgPath. Now caught up-front with an
+// actionable message naming the metachar and suggesting workarounds.
+describe('FP-VPS-011 — shell-metachar early detection', () => {
+  it('cat foo | grep bar emits shell-metachar error (not File not found)', () => {
+    assert.throws(() => validateAgainstAllowlist('cat /tmp/testapp/x | grep y'),
+      /BLOCKED \[shell-metachar\]/);
+  });
+  it('wc -l foo > count.txt emits shell-metachar error', () => {
+    assert.throws(() => validateAgainstAllowlist('wc -l /tmp/testapp/foo > count.txt'),
+      /BLOCKED \[shell-metachar\]/);
+  });
+  it('grep -e foo < input emits shell-metachar error', () => {
+    assert.throws(() => validateAgainstAllowlist('grep -e foo < /tmp/testapp/input'),
+      /BLOCKED \[shell-metachar\]/);
+  });
+  it('cat foo | grep | wc emits shell-metachar error (multiple pipes)', () => {
+    assert.throws(() => validateAgainstAllowlist('cat /tmp/testapp/foo | grep x | wc -l'),
+      /BLOCKED \[shell-metachar\]/);
+  });
+  it('error message names the metachar', () => {
+    try { validateAgainstAllowlist('cat /tmp/testapp/foo | grep x'); }
+    catch (e) {
+      assert.match((e as Error).message, /"\|"/);
+      return;
+    }
+    assert.fail('expected throw');
+  });
+  // Non-pipe args containing | as part of a larger token are unaffected by the
+  // shell-metachar guard. The arg may still fail other validation (e.g. a
+  // missing file), but it must not be rejected for shell-metachar reasons.
+  it('grep "a|b" pattern (regex with | inside arg) does not trip shell-metachar', () => {
+    try { validateAgainstAllowlist('grep "a|b" /tmp/testapp/foo'); }
+    catch (e) { assert.doesNotMatch((e as Error).message, /shell-metachar/); }
+  });
+});

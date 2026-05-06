@@ -2617,6 +2617,27 @@ function validateAgainstAllowlist(command: string): void {
   const rawBinary = parts[0];
   const args = parts.slice(1);
 
+  // FP-VPS-011 (2026-05): pipes / redirects passed via execFile reach the binary
+  // as literal arg strings ('|', '>', '<'). The previous failure mode was an
+  // opaque "File not found: '|'" from validateArgPath. Detect these tokens up
+  // front and emit a clear, actionable error. Note: chaining (`;`, `&&`, `||`)
+  // is blocked at the validateCommand RED layer before we get here. >/>> to
+  // absolute or home paths are also caught earlier; we still want a clean
+  // message for `> /tmp/x`-style fallthroughs and any `|` / `<` form.
+  const SHELL_METACHARS = new Set(['|', '>', '>>', '<', '<<', '<<<', '&']);
+  for (const tok of parts) {
+    if (SHELL_METACHARS.has(tok)) {
+      throw new Error(
+        `⛔ BLOCKED [shell-metachar]: Shell pipes and redirects ("${tok}") are not supported by run_approved_command.\n` +
+        `Each call invokes a single binary directly via execFile (no shell), so "|", ">", ">>", "<" etc. ` +
+        `reach the program as literal arguments and won't work the way you expect.\n` +
+        `Workarounds: chain operations as separate calls, use a binary's built-in flags ` +
+        `(e.g. grep -e PATTERN FILE, sort -o OUTPUT), or use the deploy tool for build pipelines.\n` +
+        `This restriction cannot be overridden.`
+      );
+    }
+  }
+
   // Reject path-qualified binary names — e.g. /usr/bin/python bypasses the name lookup.
   // Only bare binary names (no / or \) are permitted.
   if (rawBinary.includes('/') || rawBinary.includes('\\')) {
