@@ -994,6 +994,15 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bLD_PRELOAD\b/,           category: 'code-exec',       reason: 'LD_PRELOAD is prohibited (dynamic-linker injection, C7).' },
   { pattern: /\bLD_AUDIT\b/,             category: 'code-exec',       reason: 'LD_AUDIT is prohibited (dynamic-linker audit injection, C7).' },
   { pattern: /\bLD_LIBRARY_PATH\b/,      category: 'code-exec',       reason: 'LD_LIBRARY_PATH is prohibited (dynamic-linker path injection, C7).' },
+  // P1.6 (2026-05-04 bypass-review): GIT_DIR / GIT_INDEX_FILE /
+  // GIT_WORK_TREE / GIT_OBJECT_DIRECTORY / GIT_NAMESPACE / GIT_EXEC_PATH
+  // / GIT_TEMPLATE_DIR / GIT_CEILING_DIRECTORIES env-vars repoint git at
+  // attacker-controlled paths. The argv parser doesn't see env vars;
+  // GIT_DIR=/tmp/evil git commit triggers attacker hooks even though
+  // every git argv flag passes FORBIDDEN_GIT_FLAGS. Block the env-var
+  // tokens directly so KEY=VALUE prefix forms never slip.
+  { pattern: /\bGIT_(?:DIR|INDEX_FILE|WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|EXEC_PATH|TEMPLATE_DIR|CEILING_DIRECTORIES|CONFIG|CONFIG_GLOBAL|CONFIG_SYSTEM|CONFIG_NOSYSTEM|EDITOR|PAGER|SSH|SSH_COMMAND|ASKPASS)\b/,
+                                          category: 'code-exec',       reason: 'GIT_* env-var smuggling (GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_SSH_COMMAND/etc.) is prohibited — repoints git at attacker-controlled state, P1.6.' },
   // ── C10 (S60): Anti-forensics / backup-destruction toolkit ──────────────
   { pattern: /\bvssadmin\b/i,            category: 'data-destruction', reason: 'vssadmin is prohibited (VSS shadow-copy manipulation, C10).' },
   { pattern: /\bwbadmin\b/i,             category: 'data-destruction', reason: 'wbadmin is prohibited (Windows Backup destruction, C10).' },
