@@ -566,3 +566,25 @@ describe('P1.7: fetch / axel / aria2c / httpie alt-downloader bypass', () => {
   it('allows ls (regression — http(s) string in path/comment is OK)', () =>
     assertAllowed('ls /tmp/data'));
 });
+
+// ── P1.3 / P1.4 / P1.5 — git pre-subcommand RCE primitives ──────────────
+describe('P1.3/P1.4/P1.5: git -c alias.X / --config-env / -C /etc bypasses', () => {
+  it('blocks git -c alias.X=\'!evil\' X (P1.3 alias-based RCE)', () =>
+    assertBlocked("git -c alias.X='!evil' X"));
+  it('blocks git -c alias.foo=anything log (P1.3 broad alias)', () =>
+    assertBlocked('git -c alias.foo=anything log'));
+  it('blocks git -c core.hooksPath=/tmp/evil log (P1.3 sensitive key)', () =>
+    assertBlocked('git -c core.hooksPath=/tmp/evil log'));
+  it('blocks git -c core.editor=evil status (P1.3 sensitive key)', () =>
+    assertBlocked('git -c core.editor=/tmp/evil status'));
+  it('blocks git --config-env=alias.X=evil (P1.4)', () =>
+    assertBlocked('git --config-env=alias.X=evil'));
+  it('blocks git -C /etc log (P1.5)', () =>
+    assertBlocked('git -C /etc log'));
+  it('blocks git -C /root log (P1.5)', () =>
+    assertBlocked('git -C /root log'));
+  it('allows git status (regression)', () =>
+    assertAllowed('git status'));
+  it('allows git log --oneline -5 (regression)', () =>
+    assertAllowed('git log --oneline -5'));
+});

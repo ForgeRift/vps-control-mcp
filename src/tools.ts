@@ -1023,6 +1023,29 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // tokens directly so KEY=VALUE prefix forms never slip.
   { pattern: /\bGIT_(?:DIR|INDEX_FILE|WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|EXEC_PATH|TEMPLATE_DIR|CEILING_DIRECTORIES|CONFIG|CONFIG_GLOBAL|CONFIG_SYSTEM|CONFIG_NOSYSTEM|EDITOR|PAGER|SSH|SSH_COMMAND|ASKPASS)\b/,
                                           category: 'code-exec',       reason: 'GIT_* env-var smuggling (GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_SSH_COMMAND/etc.) is prohibited — repoints git at attacker-controlled state, P1.6.' },
+  // P1.3 / P1.4 / P1.5 (2026-05-04 bypass-review): defense-in-depth at
+  // the RED layer for git pre-subcommand options that the structured
+  // validateGitArgs already catches. validateGitArgs only fires when
+  // the command goes through the positive-allowlist path; commands
+  // routed through validateCommand-only paths slip. Catch:
+  //   P1.3  git -c alias.X='!evil' X  → alias-based RCE on next git X
+  //   P1.4  git --config-env=alias.X=evil  → env-var-mediated config
+  //   P1.5  git -C /etc log  → working-tree relocation to a sensitive dir
+  // The alias.* match is broad on purpose — alias values can be
+  // !shell-escapes, and the only legit place to set them is config
+  // (which is itself blocked elsewhere).
+  { pattern: /\bgit\b[^|&;\n]*\s-c\s+alias\./,
+                                          category: 'code-exec',       reason: 'git -c alias.X=… is prohibited — alias values that start with `!` execute arbitrary shell on the next git X invocation (P1.3).' },
+  { pattern: /\bgit\b[^|&;\n]*\s-c\s+core\.(?:hookspath|editor|sshcommand|fsmonitor|pager|askpass)/i,
+                                          category: 'code-exec',       reason: 'git -c core.<sensitive-key>=… is prohibited (P1.3).' },
+  { pattern: /\bgit\b[^|&;\n]*\s--config-env\b/,
+                                          category: 'code-exec',       reason: 'git --config-env (env-var-mediated config injection) is prohibited (P1.4).' },
+  // P1.5: tighten so legitimate deployments like `git -C /root/myapp status`
+  // are NOT blocked — only the bare sensitive root dir relocates the work
+  // tree to attacker-controlled space. The (?=\s|$) lookahead requires the
+  // target to be exactly /<sens> or /<sens>/ with no further path segments.
+  { pattern: /\bgit\b[^|&;\n]*\s-C\s+\/(?:etc|root|boot|usr|sys|proc|dev)\/?(?=\s|$)/,
+                                          category: 'code-exec',       reason: 'git -C with a sensitive directory target (/etc, /root, /boot, /usr, /sys, /proc, /dev) is prohibited (P1.5).' },
   // ── C10 (S60): Anti-forensics / backup-destruction toolkit ──────────────
   { pattern: /\bvssadmin\b/i,            category: 'data-destruction', reason: 'vssadmin is prohibited (VSS shadow-copy manipulation, C10).' },
   { pattern: /\bwbadmin\b/i,             category: 'data-destruction', reason: 'wbadmin is prohibited (Windows Backup destruction, C10).' },
