@@ -1834,6 +1834,18 @@ const validateGitArgs: ArgValidator = (args) => {
   const blocked = new Set(['config', 'remote', 'push', 'commit', 'rebase', 'reset', 'clean', 'gc', 'filter-branch', 'am', 'apply', 'cherry-pick', 'pull', 'fetch']);
   if (blocked.has(sub)) return `git ${sub} is not permitted via MCP (read-only git ops only).`;
   if (!GIT_ALLOWED_SUBCOMMANDS.has(sub)) return `git ${sub} is not a permitted subcommand. Allowed: ${[...GIT_ALLOWED_SUBCOMMANDS].join(', ')}.`;
+
+  // FN-VPS-004 (2026-05): `git diff --no-index a b` is a path-pair diff that
+  // ignores the repo and reads ANY two files git can stat. `/etc/shadow` is
+  // not caught by SECRET_OUTPUT_PATTERNS, so the contents reach the model.
+  // Reject --no-index anywhere in the post-subcommand args. Bare and =value
+  // forms are both rejected.
+  for (let i = subIdx + 1; i < args.length; i++) {
+    const tok = args[i];
+    if (tok === '--no-index' || tok.startsWith('--no-index=')) {
+      return 'git --no-index is not permitted (arbitrary path-pair file read).';
+    }
+  }
   return null;
 };
 

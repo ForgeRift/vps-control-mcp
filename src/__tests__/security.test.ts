@@ -1457,3 +1457,28 @@ describe('FN-VPS-001 — git pre-subcommand options are blocked', () => {
   it('still allows git diff HEAD', () =>
     assert.doesNotThrow(() => validateAgainstAllowlist('git diff HEAD')));
 });
+
+// ─── FN-VPS-004 — git diff --no-index arbitrary file read ────────────────────
+// `git diff --no-index /etc/shadow /tmp/x` ignores the repo and reads any two
+// files git can stat. /etc/shadow content is not caught by SECRET_OUTPUT_PATTERNS,
+// so contents reach the model. The pre-fix validator only checked args[0]
+// (the subcommand 'diff' — allowed) and never looked at --no-index.
+describe('FN-VPS-004 — git diff --no-index is blocked', () => {
+  it('blocks git diff --no-index /etc/shadow /tmp/x', () =>
+    assert.throws(() => validateAgainstAllowlist('git diff --no-index /etc/shadow /tmp/x'),
+      /BLOCKED \[invalid-args\]/));
+  it('blocks git diff --no-index= form', () =>
+    assert.throws(() => validateAgainstAllowlist('git diff --no-index=force a b'),
+      /BLOCKED \[invalid-args\]/));
+  it('blocks git diff with --no-index in middle position', () =>
+    assert.throws(() => validateAgainstAllowlist('git diff -u --no-index a b'),
+      /BLOCKED \[invalid-args\]/));
+  it('blocks git show --no-index defensively', () =>
+    assert.throws(() => validateAgainstAllowlist('git show --no-index a'),
+      /BLOCKED \[invalid-args\]/));
+
+  it('still allows plain git diff', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('git diff')));
+  it('still allows git diff --stat', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('git diff --stat')));
+});
