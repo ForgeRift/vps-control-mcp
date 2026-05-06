@@ -664,3 +664,61 @@ S67 adversarial review (Fourteenth Pass) — VPS-applicable findings. Cross-prod
 - `bypass-corpus.test.ts` updated: new `assertAllowlistBlocked`/`assertAllowlistAllowed` helpers call `validateAgainstAllowlist` (not `validateCommand`) for pm2/dig/service/systemctl argValidator tests.
 
 *End of fourteenth-pass findings (VPS).*
+
+---
+
+## 2026-05-04 Bypass-Discovery Round — External-AI Audit Closure
+
+**Round naming:** P0.1–P0.6, P1.1–P1.20 (mirrors `forgerift-license-api/docs/legal/external-ai-bypass-triage_2026-05.md`).
+**Source:** Round-2 multi-model bypass-discovery audit (DeepSeek + Grok + Gemini, 67 raw findings → 22 deduplicated unique).
+**Method:** Each finding verified against the live `src/tools.ts` via `validateCommand()` invocation before any code change. Stale findings (already covered) pinned with regression tests under the 2026-05 round naming.
+**Status at submission:** All in-scope VPS findings closed. 665/665 → 726/726 tests pass. No changes to auth, audit-log writer, or `legal/` directory.
+
+### Disposition
+
+| Finding | Disposition | Closure | Test count | Note |
+|---|---|---|---|---|
+| **P0.1** | New explicit rule | `edb501a` | 7 | PowerShell call operator on Linux pwsh installs. Same shape as LT P0.1. |
+| **P0.4** | Already in HARD_BLOCKED (H13) + tightened RED rule | `edb501a` | 5 | `sudoedit` / `doas` / `pkexec` / `runuser` were already in HARD_BLOCKED_PATTERNS. Tightened the RED rule `\bsudo\b` → `\bsudo(?:edit)?\b` and added explicit `runuser` for clearer category. |
+| **P0.6** | Incidentally closed via `\b` | `4f59e88` (test pin) | 7 | Path-qualified `/usr/bin/<verb>` matches `\b<verb>\b`. Pinned under round naming. |
+| **A1** | New architectural | `c9f39cb` | 9 | `BINARY_ALIASES` map + `aliasNormalize()` mirroring LT. Also added `\bpowershell\b` RED rule (was missing on VPS). |
+| **A2** | Documented, no code change | (this entry) | n/a | Word-boundary tightening — only exploitable case (`sudoedit`) shipped in P0.4. |
+| **P1.1** | New rule | `4ebf291` | 5 | `base64 -D` / `--decode` / `--decode-line`. |
+| **P1.3** | New defense-in-depth RED rules | `495000a` | 4 of the 9 in suite | `git -c alias.X=…` and `-c core.<key>=…`. validateGitArgs already catches via `FORBIDDEN_GIT_PRE_SUBCOMMAND_TOKENS`; new RED rules catch on validateCommand-only paths. |
+| **P1.4** | New defense-in-depth RED rule | `495000a` | 1 | `git --config-env`. Same rationale as P1.3. |
+| **P1.5** | New defense-in-depth RED rule | `495000a` | 2 | `git -C /<sens>` (sensitive root only — false-positive guarded against `/root/myapp` deployments). |
+| **P1.6** | New rule | `6fdc42e` | 8 | `GIT_*` env-var smuggling. Same shape as LT P1.6. |
+| **P1.7** | New rule | `5658752` | 7 | `fetch` / `axel` / `aria2c` / `httpie` (full + short `http`/`https <METHOD>`). |
+| **P1.12** | New rule | `28a5cb4` | 4 | `chattr`. |
+
+### Findings already covered by prior work
+
+| Finding | Pre-existing closure |
+|---|---|
+| P0.2 / P0.3 / P0.5 | LT-only (Windows shell forms). |
+| P1.2 ncat/socat | Already at L804–805 + L1338. |
+| P1.8 `[Reflection.Assembly]::Load*` | LT-only architecture. |
+| P1.9 `erase` | LT-only (Windows `del` synonym). |
+| P1.10 `cmd /a /c` | LT-only. |
+| P1.11 `nc-l` | `\bnc\b` matches via `\b`. |
+| P1.13 alt-truncation | M7 redirect normalization catches sensitive-path targets. |
+| P1.15 `%COMSPEC%` | LT-only (Windows env-var). |
+| P1.16 `pip3` | A1 alias map. |
+| P1.17 `nodejs` | A1 alias map. |
+| P1.18 `cipher /w:` | LT-only. |
+| P1.19 `Remove-ItemProperty` | LT-only. |
+| P1.20 `ssh-keygen create` | AMBER-tier promotion deferred. |
+
+### Findings deferred / out of scope
+
+- **P1.14 `cd .ssh && cat id_rsa`** — A3 architectural (path normalization in sensitive-file matcher). `&&` chaining is RED-blocked; deeper bypass via separate calls is a separate workstream.
+
+### Test outcome
+
+- **665/665 → 726/726 pass.** 61 new tests added (P0.1: 7, P0.4: 5, P0.6: 7, A1: 9, P1.1: 5, P1.3/4/5: 9, P1.6: 8, P1.7: 7, P1.12: 4). Zero regressions on the prior 665.
+
+### Method note
+
+For the genuinely uncovered cases (P0.1 call operator, P0.4 `sudoedit foo`, P1.1 `base64 --decode`, P1.3/P1.4/P1.5 git pre-subcommand RCE on validateCommand-only paths, P1.6 GIT_DIR, P1.7 `fetch`, P1.12 `chattr`), the new RED rules are the first defense-in-depth layer at the BLOCKED_PATTERNS tier. The structured per-binary validators (`validateGitArgs`, etc.) already caught most of P1.3/4/5 on the positive-allowlist path; the new RED rules close the gap for any code path that runs `validateCommand` without then routing through `validateAgainstAllowlist`.
+
+*End of 2026-05-04 bypass-review round (VPS).*
