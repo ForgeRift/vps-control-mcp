@@ -1785,9 +1785,47 @@ const GIT_ALLOWED_SUBCOMMANDS = new Set([
   'status', 'log', 'diff', 'show', 'pull', 'fetch', 'branch', 'tag',
   'stash', 'rev-parse', 'describe', 'shortlog',
 ]);
+
+// FN-VPS-001 (2026-05): git accepts options BEFORE the subcommand that override
+// repo config and unwind hardening. `git -c core.pager='/bin/sh -c whoami' log`
+// runs whoami because core.pager fires on log/diff output. `git -C /etc log`
+// relocates the working tree. These tokens must be rejected anywhere they
+// appear before the subcommand. We list both bare and =value forms; `--git-dir`
+// and `--git-dir=...` are both rejected by the prefix match.
+const FORBIDDEN_GIT_PRE_SUBCOMMAND_TOKENS = new Set([
+  '-c', '-C', '-P', '--paginate', '--no-pager',
+  '--git-dir', '--work-tree', '--exec-path', '--config-env',
+  '--namespace', '--super-prefix', '--list-cmds', '--attr-source',
+]);
+function isForbiddenGitPreSubcommandToken(tok: string): boolean {
+  if (FORBIDDEN_GIT_PRE_SUBCOMMAND_TOKENS.has(tok)) return true;
+  // Catch `--git-dir=/etc`, `--exec-path=/tmp`, `-c key=val` glued forms.
+  for (const prefix of FORBIDDEN_GIT_PRE_SUBCOMMAND_TOKENS) {
+    if (prefix.startsWith('--') && tok.startsWith(prefix + '=')) return true;
+  }
+  return false;
+}
+
 const validateGitArgs: ArgValidator = (args) => {
   if (args.length === 0) return 'git requires a subcommand.';
-  const sub = args[0].toLowerCase();
+
+  // FN-VPS-001 (2026-05): walk pre-subcommand tokens. The first non-flag token
+  // is the subcommand; everything before it must be vetted. The prior validator
+  // only inspected args[0], so `git -c core.pager='/bin/sh -c whoami' log` and
+  // `git --git-dir=/tmp/.git status` slipped through because args[0] was a flag,
+  // not a subcommand name — and validation against GIT_ALLOWED_SUBCOMMANDS
+  // happened against the flag string, not the real subcommand.
+  let subIdx = -1;
+  for (let i = 0; i < args.length; i++) {
+    const tok = args[i];
+    if (!tok.startsWith('-')) { subIdx = i; break; }
+    if (isForbiddenGitPreSubcommandToken(tok)) {
+      return `git pre-subcommand option "${tok}" is not permitted (config / path override).`;
+    }
+  }
+  if (subIdx === -1) return 'git requires a subcommand.';
+
+  const sub = args[subIdx].toLowerCase();
   // Block anything that writes config, remotes, hooks, or force-pushes
   // NF-S69-6: pull/fetch blocked here so users go through the structured git_pull tool
   // which injects GIT_HARDENING_FLAGS (core.sshCommand, core.editor, protocol.ext.allow, etc).

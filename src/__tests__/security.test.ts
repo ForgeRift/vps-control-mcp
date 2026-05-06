@@ -1422,3 +1422,38 @@ describe('F-OP-95 — atq restricted to safe flags', () => {
   it('atq with unknown flag is blocked', () =>
     assert.throws(() => validateAgainstAllowlist('atq -f /etc/passwd'), /BLOCKED/));
 });
+
+// ─── FN-VPS-001 — git -c / -C / --git-dir pre-subcommand option injection ─────
+// The prior validator only inspected args[0]. `git -c core.pager='/bin/sh -c whoami' log`
+// is RCE because core.pager fires on `git log` output and -c precedes the subcommand.
+// `git -C /etc log` relocates the working tree; `git --git-dir=/tmp/.git status`
+// runs git outside APP_DIR with attacker config.
+describe('FN-VPS-001 — git pre-subcommand options are blocked', () => {
+  for (const cmd of [
+    "git -c core.pager=/bin/sh log",
+    "git -c core.fsmonitor=cmd status",
+    "git -c core.sshCommand=/bin/sh status",
+    "git -C /etc log",
+    "git -C /etc/ status",
+    "git --git-dir=/tmp/.git status",
+    "git --git-dir /tmp/.git log",
+    "git --work-tree=/tmp diff",
+    "git --exec-path=/tmp/x status",
+    "git --config-env=core.pager=EVIL log",
+    "git --namespace=foo status",
+    "git -P log",
+    "git --paginate log",
+    "git --no-pager log",
+  ]) {
+    it(`blocks: ${cmd}`, () => {
+      assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
+    });
+  }
+
+  it('still allows plain git status', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('git status')));
+  it('still allows git log --oneline', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('git log --oneline')));
+  it('still allows git diff HEAD', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('git diff HEAD')));
+});
