@@ -5,6 +5,71 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased] - 2026-05-05 (NF-S69-A deny-list audit closeout)
+
+Internal adversarial audit pass against the Layer 1 deny-list and per-binary
+arg validators (denylist_audit_triage_2026-05.md). Three P0 (critical) and
+three FP-A (UX) findings closed in this batch. No version-archive bump yet --
+next release will package these together with any further P1 work.
+
+### Security (P0 -- exploitable today)
+
+- **NF-S69-A1 / FN-VPS-001** (commit `7c27613`) -- `validateGitArgs` now walks
+  pre-subcommand tokens and rejects the options git accepts before the
+  subcommand: `-c`, `-C`, `--git-dir`, `--work-tree`, `--exec-path`,
+  `--config-env`, `--namespace`, `--super-prefix`, `-P`, `--paginate`,
+  `--no-pager`, `--list-cmds`, `--attr-source`. The prior validator only
+  inspected `args[0]`, so `git -c core.pager='/bin/sh -c whoami' log` (RCE on
+  routine `git log` because `core.pager` fires on output) and
+  `git -C /etc log` / `git --git-dir=/tmp/.git status` (relocate working
+  tree) slipped through. Both bare and `=value` glued forms rejected.
+- **NF-S69-A2 / FN-VPS-004** (commit `153fd55`) -- `validateGitArgs` rejects
+  `--no-index` anywhere in the post-subcommand args. `git diff --no-index
+  /etc/shadow /tmp/x` is a path-pair diff that ignores the repo and reads
+  any two files git can stat. `/etc/shadow` content is not caught by
+  `SECRET_OUTPUT_PATTERNS`, so contents reached the model. Defensively also
+  rejected on `git show`.
+- **NF-S69-A3 / FN-VPS-012** (commit `f435a05`) -- `validateDockerArgs`
+  expanded. Prior coverage caught `--privileged`, `--network=host`,
+  `--pid=host`, `--ipc=host`, `--cap-add=all` only. Now also blocks
+  `--userns=host`, `--uts=host`, prefix-match `--cap-add=*` (any granular
+  cap, not just `=all`), `--security-opt`, `--device`. `-v` / `--volume` /
+  `--mount type=bind,source=...` source paths must resolve inside `APP_DIR`;
+  named volumes (no leading `/`) still allowed. Each missing flag was, on
+  its own, equivalent to root on the host (e.g. `-v /:/host alpine cat
+  /host/shadow`).
+
+### UX (FP-A -- friction-killers)
+
+- **FP-VPS-001** (commit `78a4a0a`) -- `\bsource\b` and `\bexport\b` patterns
+  re-anchored to start-of-token / shell-separator boundary. The prior
+  unanchored form blocked `grep export /app/x.js`,
+  `find /app/source -name '*.js'`, `ls /app/exports/`. The shell builtin
+  form (`export FOO=bar`, `; source /tmp/x`, `&& export ...`) is still
+  caught.
+- **FP-VPS-003** (commit `c237d3c`) -- `journalctl` moved from blanket RED
+  to `POSITIVE_ALLOWLIST` with `validateJournalctlArgs`. Operator opts in
+  by setting `ALLOWED_UNITS=nginx,my-api` (env, comma-separated). Every
+  invocation must name a unit on the allowlist via `-u`/`--unit`. `--follow`,
+  `--vacuum-*`, `--rotate`, `-D`/`--directory`/`--root` rejected. Sysadmins
+  can finally read their own service's logs through MCP instead of falling
+  out to SSH.
+- **FP-VPS-011** (commit `b018929`) -- `validateAgainstAllowlist` detects
+  shell metacharacters (`|`, `>`, `>>`, `<`, `<<`, `<<<`, `&`) up front and
+  emits a clear `BLOCKED [shell-metachar]` error naming the offending token
+  and suggesting workarounds. The prior failure mode was an opaque
+  "File not found: '|'" thrown by `validateArgPath` when it tried to
+  realpath the literal `|` string.
+
+### Tests
+
+- 665/665 pass (was 593 before this batch -- 72 new regression tests across
+  the six findings, every one covering both the rejected bypass attempt and
+  a representative legitimate case to guard against false positives).
+- `.env.test.fixture` now sets `ALLOWED_UNITS=nginx,my-api` so the test
+  fixture exercises a non-empty allowlist.
+
+
 ## [1.13.5] - 2026-05-04 (NF-S69-8 ANSI strip)
 
 Independent reviewer pass after Gemini chat highlighted ANSI escape
