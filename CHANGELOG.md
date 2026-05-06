@@ -5,6 +5,89 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased] - 2026-05-06 (External-AI bypass-discovery round closeout — round 2)
+
+External multi-model adversarial bypass-discovery audit (DeepSeek + Grok +
+Gemini, 67 raw findings → 22 deduplicated unique) against existing Layer 1
+patterns and per-binary validators. Two P0 (audit-claimed-uncovered) and six
+P1 findings closed, plus the A1 binary-alias normalization architectural
+improvement. Bundled with the prior NF-S69-A round (below) into the next
+version-archive bump.
+
+Full triage at `forgerift-license-api/docs/legal/external-ai-bypass-triage_2026-05.md`;
+per-finding dispositions in `ADVERSARIAL_REVIEW.md`.
+
+### Architectural
+
+- **A1 — binary-alias normalization** (commit `c9f39cb`) -- new
+  `BINARY_ALIASES` map normalizes binary references to canonical forms
+  before pattern matching: `pwsh` → `powershell`, `pip3` → `pip`, `nodejs`
+  → `node`, `ncat`/`netcat`/`nc.openbsd` → `nc`, and similar variants.
+  Complements the positive allowlist (which rejects any binary not on the
+  canonical list outright) by ensuring known-aliased forms resolve to the
+  canonical entry. 9 regression tests pinned.
+
+### Security (P0 -- audit-claimed coverage gaps)
+
+- **P0.1 / call operator + P0.4 priv-esc tightening** (commit `edb501a`)
+  -- new explicit rule for PowerShell call operator (`& { ... }`) and
+  tightened priv-esc patterns to catch sister-binaries (`sudoedit`,
+  `doas`, `pkexec`, `runuser`). The prior `\bsudo\b` failed against
+  `sudoedit` (word-boundary requires non-word char between `sudo` and
+  `edit`); new pattern explicitly enumerates priv-esc family. 7 + 5
+  regression tests.
+- **P0.6 (regression pin)** (commit `4f59e88`) -- path-qualified binary
+  forms incidentally closed by existing `\b`-anchored patterns; pinned
+  via 7 regression tests under round-2 finding ID.
+
+### Security (P1)
+
+- **P1.1 / base64 long-form decode** (commit `4ebf291`) -- `base64 -D`,
+  `--decode`, `--decode-line` covered. 5 regression tests.
+- **P1.3 / P1.4 / P1.5 — git pre-subcommand RCE** (commit `495000a`) --
+  new defense-in-depth RED rules for `git -c alias.X='!cmd'` aliasing,
+  `git --config-env`, and `git -C /<sensitive>` directory relocation.
+  `validateGitArgs` already catches these on the positive-allowlist path
+  via `FORBIDDEN_GIT_PRE_SUBCOMMAND_TOKENS`; new RED rules close the gap
+  for any code path that runs `validateCommand` without then routing
+  through `validateAgainstAllowlist`. 9 regression tests across the
+  cluster, false-positive guarded against legitimate `/root/myapp`-style
+  deployments.
+- **P1.6 / GIT_* env-var smuggling** (commit `6fdc42e`) -- same shape
+  as LT P1.6: `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`,
+  `GIT_SSH_COMMAND`, `GIT_EDITOR`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`,
+  `GIT_CEILING_DIRECTORIES`, `GIT_CONFIG*`, `GIT_PAGER`, `GIT_ASKPASS`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, `GIT_SSH`. 8 regression tests.
+- **P1.7 / alternative downloaders** (commit `5658752`) -- `fetch`,
+  `axel`, `aria2c`, `httpie`, `http <METHOD>`, `https <METHOD>`. 7
+  regression tests.
+- **P1.12 / chattr** (commit `28a5cb4`) -- file-attribute manipulation
+  including `chattr +i` and `+a`. 4 regression tests.
+
+### Tests
+
+- **665/665 → 726/726 pass.** 61 new regression tests added across this
+  round. Zero regressions on the prior 665.
+
+### Documentation
+
+- `ADVERSARIAL_REVIEW.md` updated with full disposition table (commit
+  `ce0c1ee`).
+- `SECURITY.md` updated with binary-alias canonicalization note.
+
+### Method note
+
+For the genuinely uncovered cases (P0.1 call operator, P0.4 `sudoedit foo`,
+P1.1 `base64 --decode`, P1.3/P1.4/P1.5 git pre-subcommand RCE on
+validateCommand-only paths, P1.6 GIT_DIR, P1.7 `fetch`, P1.12 `chattr`), the
+new RED rules are the first defense-in-depth layer at the BLOCKED_PATTERNS
+tier. The structured per-binary validators (`validateGitArgs`, etc.)
+already caught most of P1.3/4/5 on the positive-allowlist path; the new
+RED rules close the gap for any code path that runs `validateCommand`
+without then routing through `validateAgainstAllowlist`.
+
+---
+
 ## [Unreleased] - 2026-05-05 (NF-S69-A deny-list audit closeout)
 
 Internal adversarial audit pass against the Layer 1 deny-list and per-binary
