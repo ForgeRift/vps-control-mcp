@@ -759,6 +759,12 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bchown\b/,               category: 'permissions',     reason: 'Ownership changes are prohibited.' },
   { pattern: /\bchgrp\b/,               category: 'permissions',     reason: 'Group ownership changes are prohibited.' },
   { pattern: /\bsetfacl\b/,             category: 'permissions',     reason: 'ACL modifications are prohibited.' },
+  // P1.12 (2026-05-04 bypass-review): chattr +i sets the Linux extended-
+  // attribute immutable bit so even root cannot delete or modify the
+  // file. Used by ransomware to pin payload files in place; used by
+  // attackers to deny incident response. chattr +a (append-only) is the
+  // same denial-of-administration class.
+  { pattern: /\bchattr\b/,              category: 'permissions',     reason: 'chattr (Linux extended attributes — +i immutable, +a append-only) is prohibited (P1.12).' },
 
   // --- Firewall / network config ---
   { pattern: /\biptables\b/,            category: 'network-config',  reason: 'Firewall changes are prohibited.' },
