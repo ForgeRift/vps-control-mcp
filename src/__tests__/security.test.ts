@@ -1550,3 +1550,39 @@ describe('FP-VPS-001 — source/export anchoring', () => {
   it('allows cat /tmp/testapp/source.config.js', () =>
     expectAllowed('cat /tmp/testapp/source.config.js'));
 });
+
+// ─── FP-VPS-003 — journalctl gated on ALLOWED_UNITS ───────────────────────────
+// Sysadmins need to read their own service's logs. Prior coverage was a blanket
+// RED that forced them out to SSH. Now allowlisted with a strict per-unit gate
+// (ALLOWED_UNITS=nginx,my-api in the test fixture).
+describe('FP-VPS-003 — journalctl per-unit allowlist', () => {
+  // Allowed: -u <unit-on-list>
+  it('allows journalctl -u nginx --lines 50', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('journalctl -u nginx --lines 50')));
+  it('allows journalctl -u nginx.service --no-pager', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('journalctl -u nginx.service --no-pager')));
+  it('allows journalctl --unit my-api --since "1 hour ago"', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('journalctl --unit my-api --since "1 hour ago"')));
+  it('allows journalctl -u=nginx -n 100', () =>
+    assert.doesNotThrow(() => validateAgainstAllowlist('journalctl -u=nginx -n 100')));
+
+  // Rejected: no unit, unit not on allowlist, follow mode, vacuum, external dir
+  it('blocks journalctl with no -u (system-wide dump)', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl --lines 50'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl -u sshd (not on ALLOWED_UNITS)', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl -u sshd'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl -u nginx -f (follow mode)', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl -u nginx -f'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl -u nginx --follow', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl -u nginx --follow'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl --vacuum-size=0', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl --vacuum-size=0'), /BLOCKED/));
+  it('blocks journalctl --vacuum-time=1d', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl --vacuum-time=1d'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl --rotate', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl --rotate'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl -D /tmp/foo (external journal dir)', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl -D /tmp/foo -u nginx'), /BLOCKED \[invalid-args\]/));
+  it('blocks journalctl --root=/tmp', () =>
+    assert.throws(() => validateAgainstAllowlist('journalctl --root=/tmp -u nginx'), /BLOCKED \[invalid-args\]/));
+});

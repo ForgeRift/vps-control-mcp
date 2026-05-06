@@ -96,6 +96,12 @@ export const CONFIG = {
   // Default is empty: restart_process / get_pm2_status are no-ops until configured,
   // so there is no implicit allowlist that might match an unrelated process on this host.
   ALLOWED_PROCESSES: parseProcessList(process.env.ALLOWED_PROCESSES, []),
+
+  // FP-VPS-003: systemd units the operator wants `journalctl -u <unit>` access to.
+  // Set ALLOWED_UNITS env var as comma-separated list, e.g. ALLOWED_UNITS=nginx,my-api.
+  // Default is empty: journalctl remains effectively blocked (every invocation must
+  // name a unit, and an empty allowlist matches nothing) until the operator opts in.
+  ALLOWED_UNITS: parseProcessList(process.env.ALLOWED_UNITS, []),
 };
 
 // Derived — do not edit directly

@@ -938,7 +938,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bgetent\b/,                   category: 'info-leak',  reason: 'getent (NSS lookup) is prohibited. getent passwd exposes the full user/account list.' },
 
   // --- F-NEW-18: system log access ---------------------------------------------
-  { pattern: /\bjournalctl\b/,               category: 'info-leak',  reason: 'journalctl is prohibited (system log access).' },
+  // FP-VPS-003 (2026-05): journalctl moved to POSITIVE_ALLOWLIST with
+  // validateJournalctlArgs (gated by CONFIG.ALLOWED_UNITS). Sysadmins need to
+  // read their own service's logs; the prior blanket RED forced them out to SSH.
+  // Destructive sub-commands (--vacuum-*, --rotate, etc.) are still RED below.
   { pattern: /\bdmesg\b/,                    category: 'info-leak',  reason: 'dmesg is prohibited (kernel log access).' },
   { pattern: /\blast\s/,                     category: 'info-leak',  reason: 'last is prohibited (login history).' },
   { pattern: /\blastlog\b/,                  category: 'info-leak',  reason: 'lastlog is prohibited (login history).' },
@@ -2443,6 +2446,69 @@ const validateNslookupArgs: ArgValidator = (args) => {
   return null;
 };
 
+// FP-VPS-003 (2026-05): journalctl restricted to read ops on operator-allowlisted
+// units. Sysadmins need to read their own service's logs without falling out to
+// SSH; without this, the prior blanket RED forced them around the MCP boundary.
+//   journalctl -u <unit> --lines 100        ALLOWED iff <unit> ∈ ALLOWED_UNITS
+//   journalctl --no-pager -u nginx --since '1h ago'   ALLOWED iff nginx ∈ ALLOWED_UNITS
+//   journalctl                               REJECTED (would dump entire system journal)
+//   journalctl -u <unit> -f                  REJECTED (follow-mode hangs the per-call timeout)
+//   journalctl --vacuum-* / --rotate / --flush  REJECTED (write/destroy ops)
+//   journalctl -D <dir> / --root=<dir>       REJECTED (read external journal dir)
+const JOURNALCTL_DISALLOWED_FLAGS = new Set([
+  '-f', '--follow',
+  '-D', '--directory',
+  '--root', '--image', '--namespace',
+  '--rotate', '--flush', '--sync', '--header', '--update-catalog',
+  '--list-catalog', '--dump-catalog', '--setup-keys',
+  '--verify', '--verify-key',
+]);
+function isJournalctlVacuumOrPrefixedDisallowed(arg: string): boolean {
+  if (arg.startsWith('--vacuum-')) return true;          // size, time, files
+  if (arg.startsWith('--root='))   return true;
+  if (arg.startsWith('-D='))       return true;
+  if (arg.startsWith('--directory=')) return true;
+  if (arg.startsWith('--image='))  return true;
+  if (arg.startsWith('--namespace=')) return true;
+  return false;
+}
+const validateJournalctlArgs: ArgValidator = (args) => {
+  if (CONFIG.ALLOWED_UNITS.length === 0) {
+    return 'journalctl requires the operator to set ALLOWED_UNITS in the env (comma-separated systemd units).';
+  }
+  // First pass: reject destructive / out-of-scope flags before unit extraction.
+  for (const a of args) {
+    if (JOURNALCTL_DISALLOWED_FLAGS.has(a) || isJournalctlVacuumOrPrefixedDisallowed(a)) {
+      return `journalctl flag "${a}" is not permitted (write / follow / external-journal access).`;
+    }
+  }
+  // Second pass: every -u / --unit invocation must name an allowlisted unit.
+  // Bare and =value forms both supported.
+  let sawUnit = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    let unitName: string | null = null;
+    if (a === '-u' || a === '--unit') unitName = args[i + 1] ?? '';
+    else if (a.startsWith('--unit=')) unitName = a.slice('--unit='.length);
+    else if (a.startsWith('-u=')) unitName = a.slice('-u='.length);
+    if (unitName !== null) {
+      sawUnit = true;
+      // Strip systemd suffix variants: nginx == nginx.service.
+      const bare = unitName.replace(/\.(service|socket|target|timer|mount|path|slice|scope)$/, '');
+      const matches = CONFIG.ALLOWED_UNITS.some(u =>
+        u === unitName || u === bare || u.replace(/\.(service|socket|target|timer|mount|path|slice|scope)$/, '') === bare
+      );
+      if (!matches) {
+        return `journalctl unit "${unitName}" is not on ALLOWED_UNITS (${CONFIG.ALLOWED_UNITS.join(', ') || 'empty'}).`;
+      }
+    }
+  }
+  if (!sawUnit) {
+    return 'journalctl requires -u <unit> with a unit on ALLOWED_UNITS (no system-wide dump).';
+  }
+  return null;
+};
+
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }
 const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── System info (safe read-only) ──────────────────────────────────────────
@@ -2518,6 +2584,8 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── Service management (read-only sub-commands) — S64 v1.11.0 ────────────
   'systemctl': { description: 'systemd service status (read-only)', argValidator: validateSystemctlArgs },
   'service':   { description: 'Service status (read-only)',         argValidator: validateServiceArgs },
+  // FP-VPS-003: journalctl restricted to read ops on ALLOWED_UNITS (env-gated).
+  'journalctl': { description: 'systemd journal reader (per-unit, ALLOWED_UNITS gated)', argValidator: validateJournalctlArgs },
 
   // ── Scheduled job inspection (read-only) — S64 v1.11.0 ──────────────────
   'crontab':  { description: 'List cron jobs (-l only)',            argValidator: validateCrontabArgs },
