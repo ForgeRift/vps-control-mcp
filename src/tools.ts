@@ -803,6 +803,12 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bwget\b/,                category: 'data-exfil',      reason: 'wget is prohibited. Data cannot leave the server via MCP.' },
   { pattern: /\bnc\b/,                  category: 'data-exfil',      reason: 'netcat is prohibited.' },
   { pattern: /\bncat\b/,                category: 'data-exfil',      reason: 'ncat is prohibited.' },
+  // P0.3 / A1 (2026-05-04 bypass-review): pwsh on Linux is real (PowerShell
+  // Core ships in modern distro repos). Block the canonical -c / -File /
+  // -EncodedCommand / -enc-prefix flag forms. The aliasNormalize() pass
+  // rewrites `pwsh` → `powershell` before matching, so this rule covers
+  // both binaries.
+  { pattern: /\bpowershell\b/,          category: 'code-exec',       reason: 'powershell / pwsh invocation is prohibited (P0.3).' },
   { pattern: /\bnetcat\b/,              category: 'data-exfil',      reason: 'netcat is prohibited.' },
   { pattern: /\bsocat\b/,               category: 'data-exfil',      reason: 'socat is prohibited.' },
   { pattern: /\bssh\b/,                 category: 'data-exfil',      reason: 'Outbound SSH is prohibited.' },
@@ -991,6 +997,50 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bntdsutil\b/i,            category: 'data-destruction', reason: 'ntdsutil is prohibited (Active Directory database extraction, C10).' },
 ];
 
+// ─── A1 (2026-05-04 bypass-review): Binary-alias normalization ─────────────
+// Pattern set keyed to canonical binary names (powershell, node, nc, python,
+// pip). Cross-platform aliases and version-suffixed binaries silently slip
+// canonical patterns when invoked under different names. The map below feeds
+// aliasNormalize(), which produces a second matchable string with argv[0]
+// rewritten to its canonical form. validateCommand runs the full pattern
+// set against both the original and normalized forms.
+//
+// Coverage chosen to align with explicit P0 / P1 audit findings:
+//   P0.3  pwsh → powershell (Linux pwsh installs)
+//   P1.16 / P1.17  pip3, nodejs, python3 → canonical
+//   P1.2           ncat / netcat → nc
+const BINARY_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['pwsh',           'powershell'],
+  ['nodejs',         'node'],
+  ['ncat',           'nc'],
+  ['netcat',         'nc'],
+  ['nc.traditional', 'nc'],
+  ['nc.openbsd',     'nc'],
+  ['python3',        'python'],
+  ['python2',        'python'],
+  ['pythonw',        'python'],
+  ['py',             'python'],
+  ['pip3',           'pip'],
+]);
+
+function aliasNormalize(cmd: string): string | null {
+  const argv = tokenizeCommand(cmd);
+  if (argv.length === 0) return null;
+  const orig = argv[0];
+  let key = orig;
+  const sep = Math.max(key.lastIndexOf('/'), key.lastIndexOf('\\'));
+  if (sep >= 0) key = key.slice(sep + 1);
+  key = key.replace(/\.exe$/i, '').toLowerCase();
+  if (/^python\d+(\.\d+)?w?$/.test(key)) key = 'python';
+  if (/^pip\d+$/.test(key)) key = 'pip';
+  const canonical = BINARY_ALIASES.get(key) ?? (key === 'python' || key === 'pip' ? key : undefined);
+  if (!canonical || canonical === orig) return null;
+  const trimmedStart = cmd.search(/\S/);
+  if (trimmedStart < 0) return null;
+  if (cmd.slice(trimmedStart, trimmedStart + orig.length) !== orig) return null;
+  return cmd.slice(0, trimmedStart) + canonical + cmd.slice(trimmedStart + orig.length);
+}
+
 // ── AMBER: Warning-tier patterns ─────────────────────────────────────────────
 // These commands are sometimes legitimate but carry risk. When matched:
 // - dry_run=true: warning returned, execution blocked — user must re-call with dry_run=false
@@ -1030,27 +1080,37 @@ function validateCommand(command: string): void {
     );
   }
 
+  // A1 (2026-05-04): build the matchable list — original command plus its
+  // alias-normalized form (pwsh→powershell, ncat→nc, python3→python, …).
+  const matchables: string[] = [command];
+  const normalized = aliasNormalize(command);
+  if (normalized !== null) matchables.push(normalized);
+
   // RED tier — hard block
-  for (const { pattern, category, reason } of BLOCKED_PATTERNS) {
-    if (pattern.test(command)) {
-      throw new Error(
-        `⛔ BLOCKED [${category}]: ${reason}\n` +
-        `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
-        `Attempting to circumvent security controls violates the Terms of Service.`
-      );
+  for (const candidate of matchables) {
+    for (const { pattern, category, reason } of BLOCKED_PATTERNS) {
+      if (pattern.test(candidate)) {
+        throw new Error(
+          `⛔ BLOCKED [${category}]: ${reason}\n` +
+          `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+          `Attempting to circumvent security controls violates the Terms of Service.`
+        );
+      }
     }
   }
 
   // HARD_BLOCKED_PATTERNS (Layer 1 of BLOCKED tier) — also enforce synchronously
   // so validateCommand provides complete single-call safety coverage regardless
   // of whether the async three-layer pipeline is invoked.
-  const hardBlocked = checkHardBlocked(command);
-  if (hardBlocked) {
-    throw new Error(
-      `⛔ BLOCKED [${hardBlocked.category}]: Command matches a hard-blocked pattern.\n` +
-      `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
-      `Attempting to circumvent security controls violates the Terms of Service.`
-    );
+  for (const candidate of matchables) {
+    const hardBlocked = checkHardBlocked(candidate);
+    if (hardBlocked) {
+      throw new Error(
+        `⛔ BLOCKED [${hardBlocked.category}]: Command matches a hard-blocked pattern.\n` +
+        `This restriction cannot be overridden. Run this command directly on the server via SSH.\n` +
+        `Attempting to circumvent security controls violates the Terms of Service.`
+      );
+    }
   }
 }
 

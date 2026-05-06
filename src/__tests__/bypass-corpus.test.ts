@@ -461,3 +461,25 @@ describe('P0.4: sudoedit / runuser explicit RED rule', () => {
   it('still blocks bare sudo (regression)', () =>
     assertBlocked('sudo whoami'));
 });
+
+// ── A1 — Binary-alias normalization ─────────────────────────────────────
+describe('A1: BINARY_ALIASES — pwsh/nodejs/ncat/python3/pip3 → canonical', () => {
+  it('blocks pwsh -c (canonical: powershell -c)', () =>
+    assertBlocked("pwsh -c 'Get-Process'"));
+  it('blocks /usr/bin/pwsh -c (path-qualified pwsh alias)', () =>
+    assertBlocked("/usr/bin/pwsh -c 'evil'"));
+  it('blocks nodejs -e "..." (canonical: node -e)', () =>
+    assertBlocked('nodejs -e "console.log(1)"'));
+  it('blocks ncat -l 4444 (canonical: nc)', () =>
+    assertBlocked('ncat -l -p 4444'));
+  it('blocks netcat -l 4444 (canonical: nc)', () =>
+    assertBlocked('netcat -l -p 4444'));
+  it('blocks python3 -c "..." (canonical: python -c)', () =>
+    assertBlocked('python3 -c "print(1)"'));
+  it('blocks python3.12 -c "..." (version-suffixed)', () =>
+    assertBlocked('python3.12 -c "print(1)"'));
+  it('blocks pip3 install pkg (canonical: pip install)', () =>
+    assertBlocked('pip3 install requests'));
+  it('allows nodejs --version (false-positive guard)', () =>
+    assertAllowed('nodejs --version'));
+});
