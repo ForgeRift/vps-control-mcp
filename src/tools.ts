@@ -864,8 +864,15 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /\bawk\b.*>\s*["']?\//,           category: 'file-write', reason: 'awk writing to absolute paths is prohibited.' },
 
   // --- Environment manipulation ---
-  { pattern: /\bexport\b/,              category: 'env-manip',        reason: 'Environment variable export is prohibited.' },
-  { pattern: /\bsource\b/,              category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
+  // FP-VPS-001 (2026-05): anchor to start-of-token / shell-separator boundary so
+  // legitimate args containing the words "export"/"source" pass:
+  //   grep export /app/index.js     → was BLOCKED, now ALLOWED
+  //   find /app/source -name '*.js' → was BLOCKED, now ALLOWED
+  //   ls /app/exports/              → was BLOCKED, now ALLOWED
+  // The shell builtin form (`export FOO=bar`, `source /tmp/x`, `; export ...`,
+  // `&& source ...`, `| export ...`) is still caught.
+  { pattern: /(?:^|[;&|]\s*)export(?:\s|$)/,  category: 'env-manip',  reason: 'Environment variable export is prohibited.' },
+  { pattern: /(?:^|[;&|]\s*)source(?:\s|$)/,  category: 'env-manip',  reason: 'Sourcing files is prohibited.' },
   { pattern: /(?:^|[;&|])\s*\.\s+\//,   category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
 
   // --- Privilege escalation ---

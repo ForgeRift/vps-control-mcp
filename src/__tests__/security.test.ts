@@ -1526,3 +1526,27 @@ describe('FN-VPS-012 — docker run dangerous flags blocked', () => {
   it('still allows docker ps', () =>
     assert.doesNotThrow(() => validateAgainstAllowlist('docker ps')));
 });
+
+// ─── FP-VPS-001 — anchor \bsource\b and \bexport\b to start-of-token ──────────
+// The unanchored \bsource\b / \bexport\b patterns matched any occurrence of the
+// substring, blocking benign commands like `grep export /app/x.js` or
+// `ls /app/exports/`. Replace with start-of-line / shell-separator anchors so
+// only the actual builtin form is rejected.
+describe('FP-VPS-001 — source/export anchoring', () => {
+  // Builtin form still blocked:
+  it('blocks export FOO=bar', () => expectBlocked('export FOO=bar'));
+  it('blocks source /tmp/evil', () => expectBlocked('source /tmp/evil'));
+  it('blocks ; export FOO=bar', () => expectBlocked(' ; export FOO=bar'));
+  it('blocks && source x', () => expectBlocked(' && source /tmp/x'));
+  it('blocks | export FOO=bar', () => expectBlocked(' | export FOO=bar'));
+
+  // Substring usage now allowed:
+  it('allows grep export /tmp/testapp/index.js', () =>
+    expectAllowed('grep export /tmp/testapp/index.js'));
+  it('allows find /tmp/testapp/source -name *.js', () =>
+    expectAllowed('find /tmp/testapp/source -name "*.js"'));
+  it('allows ls /tmp/testapp/exports', () =>
+    expectAllowed('ls /tmp/testapp/exports'));
+  it('allows cat /tmp/testapp/source.config.js', () =>
+    expectAllowed('cat /tmp/testapp/source.config.js'));
+});
