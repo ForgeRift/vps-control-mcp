@@ -876,10 +876,20 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   { pattern: /(?:^|[;&|])\s*\.\s+\//,   category: 'env-manip',        reason: 'Sourcing files is prohibited.' },
 
   // --- Privilege escalation ---
-  { pattern: /\bsudo\b/,                category: 'priv-esc',         reason: 'sudo is prohibited.' },
+  // P0.4 (2026-05-04 bypass-review): \bsudo\b doesn't match between sudo and
+  // edit (both word chars). Tighten to also catch sudoedit; runuser/sudoedit
+  // are already in HARD_BLOCKED but explicit RED rules give clearer category.
+  { pattern: /\bsudo(?:edit)?\b/,       category: 'priv-esc',         reason: 'sudo / sudoedit is prohibited.' },
   { pattern: /\bsu\b\s/,                category: 'priv-esc',         reason: 'su (switch user) is prohibited.' },
   { pattern: /\bpkexec\b/,              category: 'priv-esc',         reason: 'pkexec is prohibited.' },
   { pattern: /\bdoas\b/,                category: 'priv-esc',         reason: 'doas is prohibited.' },
+  { pattern: /\brunuser\b/,             category: 'priv-esc',         reason: 'runuser (util-linux user-switch) is prohibited.' },
+  // P0.1 (2026-05-04 bypass-review): pwsh can be installed on Linux; the
+  // PowerShell call operator with a script-block or string runs arbitrary
+  // PowerShell without invoking iex/Invoke-Expression. The (?:^|[\s;|])
+  // prefix avoids matching `&` inside quoted argv values; [{'"] requires
+  // the script-block / string form (bare `& cmd` is the chaining form).
+  { pattern: /(?:^|[\s;|])\s*&\s*[\{'"]/, category: 'code-exec',      reason: 'PowerShell call operator with script-block or string (`& { ... }`, `& "..."`, `& \'...\'`) is prohibited (P0.1).' },
 
   // --- History / info leakage ---
   { pattern: /\bhistory\b/,             category: 'info-leak',        reason: 'Command history access is prohibited.' },

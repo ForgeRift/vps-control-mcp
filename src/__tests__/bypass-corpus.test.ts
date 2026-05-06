@@ -425,3 +425,39 @@ describe('F-S68-15: pm2 blocked sub-commands', () => {
   it('still allows pm2 logs myapp',
     () => { const r = validatePm2Args(['logs', 'myapp']); assert.equal(r, null, `unexpected block: ${r}`); });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2026-05-04 bypass-review round — P0/P1 closures
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── P0.1 — PowerShell call operator (& {…}) on Linux pwsh ────────────────
+describe('P0.1: PowerShell call operator (& {…}, & "...", & \'...\')', () => {
+  it('blocks & { Write-Host evil }', () =>
+    assertBlocked('& { Write-Host "pwned" }'));
+  it('blocks & {Get-Process}', () =>
+    assertBlocked('& {Get-Process}'));
+  it('blocks & \'/tmp/evil\'', () =>
+    assertBlocked("& '/tmp/evil'"));
+  it('blocks & "/tmp/evil"', () =>
+    assertBlocked('& "/tmp/evil"'));
+  it('blocks &"calc"', () =>
+    assertBlocked('&"calc"'));
+  it('benign cmd not blocked', () =>
+    assertAllowed('echo hello'));
+  it('git status not blocked', () =>
+    assertAllowed('git status'));
+});
+
+// ── P0.4 — sudoedit / runuser regression (already in HARD_BLOCKED) ───────
+describe('P0.4: sudoedit / runuser explicit RED rule', () => {
+  it('blocks sudoedit foo (no sensitive path required)', () =>
+    assertBlocked('sudoedit foo'));
+  it('blocks sudoedit /etc/passwd', () =>
+    assertBlocked('sudoedit /etc/passwd'));
+  it('blocks runuser', () =>
+    assertBlocked('runuser -u root -- whoami'));
+  it('blocks doas (regression)', () =>
+    assertBlocked('doas whoami'));
+  it('still blocks bare sudo (regression)', () =>
+    assertBlocked('sudo whoami'));
+});
