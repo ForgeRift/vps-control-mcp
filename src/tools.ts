@@ -807,6 +807,20 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; category: string; reason: strin
   // --- Data exfiltration (outbound network) ---
   // curl is allowed but validated to localhost-only and safe flags in the positive allowlist.
   { pattern: /\bwget\b/,                category: 'data-exfil',      reason: 'wget is prohibited. Data cannot leave the server via MCP.' },
+  // P1.7 (2026-05-04 bypass-review): alternative download primitives
+  // not previously in the deny-list. fetch (FreeBSD/macOS), axel /
+  // aria2c (parallel downloaders shipped in many distros), httpie
+  // (`http GET …` and `https GET …`), are all canonical exfil/download
+  // tools — none were caught by the curl/wget regexes.
+  { pattern: /\bfetch\b/,               category: 'data-exfil',      reason: 'fetch (FreeBSD/macOS downloader) is prohibited (P1.7).' },
+  { pattern: /\baxel\b/,                category: 'data-exfil',      reason: 'axel (parallel downloader) is prohibited (P1.7).' },
+  { pattern: /\baria2c\b/,              category: 'data-exfil',      reason: 'aria2c (parallel downloader) is prohibited (P1.7).' },
+  { pattern: /\bhttpie\b/,              category: 'data-exfil',      reason: 'httpie is prohibited (P1.7).' },
+  // httpie also ships short-name binaries `http` and `https`. Block the
+  // verb-form invocations (http GET …, https POST …) without breaking
+  // legitimate URL fragments by requiring an HTTP-method token.
+  { pattern: /\bhttps?\b\s+(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/i,
+                                          category: 'data-exfil',    reason: 'httpie short-name `http`/`https` <METHOD> ... is prohibited (P1.7).' },
   { pattern: /\bnc\b/,                  category: 'data-exfil',      reason: 'netcat is prohibited.' },
   { pattern: /\bncat\b/,                category: 'data-exfil',      reason: 'ncat is prohibited.' },
   // P0.3 / A1 (2026-05-04 bypass-review): pwsh on Linux is real (PowerShell

