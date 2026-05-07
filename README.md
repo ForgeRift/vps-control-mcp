@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-BUSL--1.1-orange.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-audited-brightgreen.svg)](SECURITY.md)
 
-Give Claude direct, audited control over your Linux VPS. Deploy applications, monitor infrastructure, tail logs, and manage servers — all through structured tools with a three-tier security model and full audit logging.
+A remote MCP endpoint for production-ops on your Linux VPS. Self-hosted on the VPS itself; any Claude client (Claude Desktop, Cowork, or another MCP client) connects to it with a per-operator bearer token. Built for teams and solo operators who run real infrastructure and want Claude-driven operations under hard, deterministic guardrails — not SSH access to a CLI session, and not "trust the developer's judgment" as the operative safety control. Deploy applications, monitor infrastructure, tail logs, and manage servers through structured tools with a three-tier security model, per-token audit logging, and optional AI-assisted safety classification.
 
 > **Built by [ForgeRift LLC](https://forgerift.io).** Claude is a product of Anthropic PBC. ForgeRift is an independent third-party developer and is not affiliated with, endorsed by, or sponsored by Anthropic.
 

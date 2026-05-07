@@ -8,13 +8,13 @@
 
 *ForgeRift LLC is an independent third-party developer and is not affiliated with, endorsed by, or sponsored by Anthropic PBC.*
 
-You use Claude to write deploy scripts, debug errors, and figure out why your server is slow — but you still have to copy every command into a terminal yourself. vps-control-mcp closes that gap.
+**A remote MCP endpoint built for production-ops.** vps-control-mcp self-hosts on your Linux VPS and exposes a structured tool surface that any Claude client (Claude Desktop, Cowork, or another MCP client) can connect to with a bearer token. You operate the production server through Claude — restart your app, tail error logs, run a deploy, check disk and memory, pull the latest git commits — without SSH'ing in, without running a CLI session on the VPS, and without giving Claude unrestricted shell access.
 
-Give Claude structured, audited access to your Linux VPS. It can restart your app, tail error logs, run a deploy, check disk and memory, and pull the latest git commits — all from Claude, without you ever opening a terminal.
+**Designed for teams and solo operators who run real infrastructure.** Per-operator bearer tokens (multi-token mode integrates with the ForgeRift licensing back-end), per-token rate limits, per-token audit log. When a teammate joins or leaves, you provision or revoke their token; the audit log shows exactly which operator did what, when. The tool is built for the case where giving every operator SSH access to the production VPS is the wrong answer, and where "trust the developer's judgment" is too weak a control for the operations being performed.
 
-Every command passes through 275+ permanently blocked dangerous patterns. `rm -rf`, package removal, firewall changes, credential files — none of it can run. What Claude *can* do is clearly defined, logged to an audit trail, and reviewed across 13 adversarial security passes.
+Every command passes through 275+ permanently blocked dangerous patterns. `rm -rf`, package removal, firewall changes, credential files — none of it can run. Optional AI-assisted second-pass safety classification (Layer 2 + Layer 3 multi-perspective board) when an Anthropic API key is configured, **fail-closed by default** — when the API call fails, commands are refused, not silently permitted. What Claude *can* do is clearly defined, logged to an audit trail with secret scrubbing, and reviewed across 13 adversarial security passes.
 
-For developers and non-technical users running a DigitalOcean, Vultr, Linode, or similar VPS with Node, Python, or Docker apps.
+For developers, agencies, and ops teams running a DigitalOcean, Vultr, Linode, AWS Lightsail, or similar VPS with Node, Python, or Docker apps in production.
 
 ---
 
@@ -57,7 +57,7 @@ You don't need to know what PM2 is, what a process ID means, or how git pull wor
 
 **Hard-blocked surface:** 275+ patterns across 44 categories including recursive deletion, destructive git ops, database destruction, disk-level writes, system power state, credential/key destruction, firewall teardown, audit log destruction, container nuclear ops, kernel namespace escape, SSH pivot flags (`systemctl -H/--host/-M/--machine`), and more. HARD_BLOCKED patterns run synchronously before the AI classification layer; they can only be loosened via the audit-logged `BYPASS_BINARIES` env (each demotion logged as `[SECURITY-BYPASS]`). The full enumeration is in `COMMAND_POLICY.md`.
 
-**AI classification:** Optional Layer 2/3 pipeline using `ANTHROPIC_API_KEY`. Layer 2 is a single Claude classifier. Layer 3 is a multi-persona security board (Developer, Security Auditor, Ops Engineer) that must reach consensus. Fails closed when the API key is absent or the layer returns an unexpected format — you never get silent permissiveness.
+**AI classification:** Optional Layer 2/3 pipeline using `ANTHROPIC_API_KEY`. Layer 2 is a single Claude classifier. Layer 3 is a multi-persona security board (Developer, Security Auditor, Ops Engineer) that must reach consensus. Fails closed by default (`LAYER_STRICT_MODE=true`) when the API key is absent or the layer returns an unexpected format — you never get silent permissiveness. Operators may set `LAYER_STRICT_MODE=false` to opt into degraded mode (Layer 1 deterministic deny-list only). **Important:** the plugin's safety story depends on the *combination* of the static deny-list and the AI classification. Operating in strict-mode-off / no-AI-key configuration is supported but is "degraded mode" — outside the intended security model. Operators in degraded mode accept all risk for any command the static layer alone fails to block; ForgeRift's liability is limited per the [MCP EULA §§6.1, 10–12](https://forgerift.io/legal/mcp-eula). Deliberately disabling, patching, or replacing the static deny-list, validators, audit log, or secret-scrubbing pipeline is a EULA violation under §3.
 
 **Positive allowlist:** `run_approved_command` operates on a binary allowlist with per-binary arg validators, not a blocklist. Binaries not on the list are rejected outright. Validators enforce sub-command whitelists (e.g. `systemctl` only accepts `status`, `is-active`, `is-enabled`, `is-failed`, `list-units`, `list-unit-files`, `list-sockets`, `list-timers`, `help`) and flag restrictions.
 

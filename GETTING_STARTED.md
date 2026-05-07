@@ -1,6 +1,6 @@
 ﻿# Getting Started with vps-control-mcp
 
-Welcome. This guide walks you through connecting Claude to your VPS (Virtual Private Server) so you can manage it through conversation — deploy code, check logs, restart services, and more — without logging into the server yourself.
+Welcome. This guide walks you through connecting Claude to your VPS (Virtual Private Server) so you can manage it through conversation — deploy code, check logs, restart services, and more — without logging into the server yourself or running a separate terminal session.
 
 **Not sure if this is the right plugin?** If you want to control your Windows PC rather than a remote Linux server, see [local-terminal-mcp](https://github.com/ForgeRift/local-terminal-mcp) instead.
 
@@ -8,7 +8,9 @@ Welcome. This guide walks you through connecting Claude to your VPS (Virtual Pri
 
 ## What Does This Actually Do?
 
-vps-control-mcp gives Claude a secure connection to your Linux VPS. Once connected, you can say things like:
+vps-control-mcp is a remote MCP endpoint that you self-host on your Linux VPS. Once installed, any Claude client you use (Claude Desktop, Cowork, or another MCP client) connects to it with a bearer token, and Claude can run a defined set of operational commands on the server. It's built for the case where you want Claude to operate production infrastructure under hard guardrails — not for casual SSH replacement, and not as a developer-only CLI.
+
+Once connected, you can say things like:
 
 - *"Check if my Node app is running and show me the last 50 lines of logs"*
 - *"Deploy the latest version of my backend from the main branch"*
@@ -16,7 +18,7 @@ vps-control-mcp gives Claude a secure connection to your Linux VPS. Once connect
 - *"How much disk space is left and which directories are biggest?"*
 - *"Show me any errors in the last hour from my app logs"*
 
-Claude runs commands on your server, reads the output, and responds in plain English. You stay in Claude — no SSH client required.
+Claude runs commands on your server, reads the output, and responds in plain English. Every command is checked against a 275+-pattern static deny-list and (optionally) a second-pass AI safety classifier before it executes. Every tool call is written to a per-token audit log on the VPS. You stay in Claude — no SSH client required, no terminal session running, and no team member needing direct shell access.
 
 ---
 
@@ -186,6 +188,18 @@ Every command Claude tries to run goes through three layers of review:
 3. **Audit log** — Every command attempt — approved or blocked — is written to `audit.log` on your server with a timestamp. You can ask Claude to show it to you at any time: *"Show me the audit log from today."*
 
 Your MCP_AUTH_TOKEN is the key to all of this. Keep it secret. Rotate it if you think it was exposed. Don't commit it to GitHub.
+
+---
+
+## Optional: Enable AI Safety Review (and What It Costs)
+
+By default, vps-control-mcp ships with `LAYER_STRICT_MODE=true`, which means the AI safety layers (Layer 2 + Layer 3) **fail closed** when no Anthropic API key is configured — the shell-command escape-hatch tool (`run_approved_command`) returns `BLOCKED: safety-evaluation-unavailable` until you either provide a key or explicitly opt into permissive mode by setting `LAYER_STRICT_MODE=false`. The deterministic deny-list and pattern scanner (Layer 1) always run regardless and continue to enforce the 275+ HARD_BLOCKED patterns.
+
+To enable the AI safety review, add an `ANTHROPIC_API_KEY` line to `/root/vps-control-mcp/.env` on your server and `pm2 restart vps-mcp` to pick it up. The key comes from [console.anthropic.com](https://console.anthropic.com).
+
+**Cost note:** When an Anthropic API key is configured, **every `run_approved_command` invocation** (the shell-command escape hatch — not every plugin tool) sends two parallel classification requests to Anthropic's API: a Layer 2 safety check using a Haiku-tier model and a Layer 3 multi-perspective board review using a Sonnet-tier model. These calls consume tokens billed to **your own Anthropic account** at standard API rates — ForgeRift is not the merchant of record and does not receive any portion of those charges. Light ops use typically results in a few US dollars per month; heavier deploy-and-debug workloads may cost more. The plugin's other tools (file reads, log inspection, structured `git` / `npm` / `pm2` invocations, etc.) do not call Anthropic's API and consume no tokens. The plugin enforces the deterministic deny-list at every tool call regardless of whether AI classification is configured.
+
+**Important — intended security model:** The plugin's safety story is the combination of the deterministic deny-list (the 275+ HARD_BLOCKED patterns built into the plugin code, plus per-binary validators like `validateSystemctlArgs`, which always run locally and free) **and** the optional AI safety review (Layers 2 + 3, which require an Anthropic API key). vps-control-mcp's default is `LAYER_STRICT_MODE=true` — fail-closed when the API key is absent or the API call errors. **Setting `LAYER_STRICT_MODE=false` is supported but is an explicit, deliberate choice to operate in degraded mode**, outside the intended security model. In that configuration, the deterministic deny-list continues to enforce the hard-blocked patterns — but you accept the risk of any command that the deterministic layer alone fails to block, and ForgeRift's liability for damage arising in this configuration is limited per the EULA Section 11 and Section 6.1. Marketing language about "AI-assisted safety classification" describes the combined model, not the strict-mode-off configuration. Deliberately disabling, modifying, or patching the deterministic deny-list itself (as opposed to flipping `LAYER_STRICT_MODE`) is a violation of the EULA Section 3 and removes the liability protections you would otherwise have under this EULA. See the EULA at [forgerift.io/legal/mcp-eula](https://forgerift.io/legal/mcp-eula) for the full language.
 
 ---
 
