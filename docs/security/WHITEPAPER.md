@@ -70,15 +70,27 @@ Three threats drive the design:
    `--url=URL` and `--proxy=URL` were previously waved through
    because the validator skipped any `-`-prefixed arg.
 
-4. **License key theft and sharing.** A bad actor steals the
-   customer's license key or the customer shares it. Mitigation: the
-   `forgerift-license-api` backend binds each license to a Stripe
-   product, and the plugin sends `product_id` on every validation
-   call so a key bound to a different product is denied with
-   `product_mismatch`. Per-machine activation cap is enforced
-   atomically by a Postgres stored proc; a license-sharing cron sweep
-   alerts the operator if one key shows up on >=5 distinct machines
-   in 24h.
+4. **Bearer token theft and sharing.** A bad actor steals the
+   customer's bearer token or the customer shares it. Mitigation:
+   every incoming MCP request re-validates the token against the
+   `customers` table -- `plan` must be `vps-control` or `bundle`,
+   `status` must be `active` / `trial` / `grace`, and any non-NULL
+   `expires_at` must be in the future. A token revoked or rotated
+   by the operator (`customers.token`) propagates to all clients
+   within at most 5 minutes (the positive-cache TTL); a 30-minute
+   negative cache absorbs random-token floods. The shape pre-validator
+   (length 16-512, printable ASCII) blocks malformed tokens before
+   any backend round-trip, and a circuit breaker opens after 120
+   cache-misses per minute (`SUPABASE_CIRCUIT_THRESHOLD`).
+
+   Sharing detection on VPS today is operator-side: the per-request
+   audit log (see "Data handling" below) gives the operator forensic
+   visibility into traffic patterns, and the operator can rotate
+   `customers.token` in Stripe / the billing dashboard if abuse is
+   detected. The family-level per-machine activation cap (the
+   `register_activation_with_cap` Postgres flow used by
+   `local-terminal-mcp`) does NOT apply to VPS -- see "What VPS does
+   NOT do today" below for the reasoning.
 
 ## Command pipeline detail
 
