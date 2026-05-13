@@ -5,6 +5,27 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased] - 2026-05-13 (MCP spec compliance: full annotation hints on all tools)
+
+Audit pass against Anthropic's "Writing effective tools for agents"
+guidance and the MCP tool-annotations spec. Closes the two missing hint
+fields (`idempotentHint`, `openWorldHint`) on every one of the 17 tools.
+Additive only — no behavioural change.
+
+### Tool annotations (spec compliance)
+
+- Read-only local tools (`get_pm2_status`, `get_recent_errors`,
+  `get_recent_output`, `read_file_section`, `search_file`, `git_status`,
+  `git_log`, `get_system_health`, `get_job_status`, `read_audit_log`,
+  `get_deploy_status`) set `idempotentHint: true, openWorldHint: false`.
+- `git_pull`, `git_push`, `deploy`, `deploy_vps_mcp` talk to `origin`
+  (and `deploy*` additionally hits package registries via npm/pnpm install)
+  → `openWorldHint: true`. None are idempotent on repeated calls.
+- `restart_process` mutates local state, not idempotent on repeated calls,
+  no network → `idempotentHint: false, openWorldHint: false`.
+- `run_approved_command` executes arbitrary shell with patterns
+  hard-blocked server-side → `idempotentHint: false, openWorldHint: true`.
+
 ## [Unreleased] - 2026-05-06 (External-AI bypass-discovery round closeout — round 2)
 
 External multi-model adversarial bypass-discovery audit (DeepSeek + Grok +

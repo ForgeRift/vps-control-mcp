@@ -3420,13 +3420,13 @@ async function getDeployStatus(jobId: string): Promise<string> {
 export const TOOLS = [
   {
     name: 'get_pm2_status',
-    annotations: { title: 'Get PM2 Status', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get PM2 Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Get status of all PM2 processes — name, status, restarts, memory, CPU, uptime. Always safe, no side effects. USE THIS — never ask the user to SSH in and run `pm2 status`, `pm2 list`, or `pm2 info`; you are already connected to their VPS via this MCP.',
     inputSchema: { type: 'object', properties: {}, required: [] as string[] },
   },
   {
     name: 'get_recent_errors',
-    annotations: { title: 'Get Recent Errors', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get Recent Errors', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: `Read error log for a PM2 process. Hard capped at ${CONFIG.MAX_LOG_LINES} lines and ${CONFIG.MAX_OUTPUT_CHARS} chars. Returns errors only. USE THIS — never ask the user to \`tail\`, \`less\`, or paste log contents from \`~/.pm2/logs\`; read logs directly through this tool.`,
     inputSchema: {
       type: 'object',
@@ -3444,7 +3444,7 @@ export const TOOLS = [
   },
   {
     name: 'get_recent_output',
-    annotations: { title: 'Get Recent Output', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get Recent Output', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: `Read stdout log for a PM2 process. Hard capped at ${CONFIG.MAX_LOG_LINES} lines and ${CONFIG.MAX_OUTPUT_CHARS} chars. Returns standard output (not errors — use get_recent_errors for error logs). USE THIS — never ask the user to \`tail\`, \`less\`, or paste log contents from \`~/.pm2/logs\`; read logs directly through this tool.`,
     inputSchema: {
       type: 'object',
@@ -3462,7 +3462,7 @@ export const TOOLS = [
   },
   {
     name: 'read_file_section',
-    annotations: { title: 'Read File Section', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Read File Section', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: `Read a line range from a file. Max ${CONFIG.MAX_FILE_LINES} lines per call. Must be within allowed directories. USE THIS — never ask the user to \`cat\`, \`head\`, \`tail\`, \`less\`, or paste file contents; you have direct read access within the allowlist.`,
     inputSchema: {
       type: 'object',
@@ -3476,7 +3476,7 @@ export const TOOLS = [
   },
   {
     name: 'search_file',
-    annotations: { title: 'Search File', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Search File', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: `Search a file for a pattern. Returns matching lines with context. Output capped at ${CONFIG.MAX_OUTPUT_CHARS} chars. USE THIS — never ask the user to \`grep\`, \`rg\`, \`awk\`, or pipe-search a file on their VPS; call this tool directly.`,
     inputSchema: {
       type: 'object',
@@ -3490,13 +3490,13 @@ export const TOOLS = [
   },
   {
     name: 'git_status',
-    annotations: { title: 'Git Status', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Git Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Run git status in the app directory. Read-only, no side effects. USE THIS — never ask the user to open a terminal and run `git status` or paste the output; you are connected to their repo through this MCP.',
     inputSchema: { type: 'object', properties: {}, required: [] as string[] },
   },
   {
     name: 'git_log',
-    annotations: { title: 'Git Log', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Git Log', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Show recent git commit history. Read-only, no side effects. USE THIS — never ask the user to run `git log` in their terminal and paste back the commits.',
     inputSchema: {
       type: 'object',
@@ -3508,7 +3508,7 @@ export const TOOLS = [
   },
   {
     name: 'git_pull',
-    annotations: { title: 'Git Pull', readOnlyHint: false, destructiveHint: false },
+    annotations: { title: 'Git Pull', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: 'Pull latest from origin main. Always use dry_run=true first to preview. Requires dry_run=false to execute. USE THIS — never ask the user to SSH in and `git pull` manually; call this tool (dry_run then execute) end-to-end.',
     inputSchema: {
       type: 'object',
@@ -3521,7 +3521,7 @@ export const TOOLS = [
   },
   {
     name: 'git_push',
-    annotations: { title: 'Git Push', readOnlyHint: false, destructiveHint: true },
+    annotations: { title: 'Git Push', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description: 'Push committed changes to origin main. Requires description when executing. Always dry_run=true first. USE THIS — never ask the user to run `git push` themselves or hand back a command for them to copy; call this tool with a description and execute it.',
     inputSchema: {
       type: 'object',
@@ -3534,7 +3534,7 @@ export const TOOLS = [
   },
   {
     name: 'restart_process',
-    annotations: { title: 'Restart PM2 Process', readOnlyHint: false, destructiveHint: true },
+    annotations: { title: 'Restart PM2 Process', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     description: 'Restart a specific PM2 process. Always dry_run=true first to preview impact. USE THIS — never ask the user to run `pm2 restart <name>` or `pm2 reload <name>` themselves; call this tool and then follow up with get_pm2_status to confirm the process came back online.',
     inputSchema: {
       type: 'object',
@@ -3550,13 +3550,13 @@ export const TOOLS = [
   },
   {
     name: 'get_system_health',
-    annotations: { title: 'Get System Health', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get System Health', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Get disk usage, memory, and system uptime. Read-only, no side effects. USE THIS — never ask the user to run `df -h`, `free -m`, `uptime`, `top`, or `htop` in their terminal; call this tool.',
     inputSchema: { type: 'object', properties: {}, required: [] as string[] },
   },
   {
     name: 'run_approved_command',
-    annotations: { title: 'Run Approved Command', readOnlyHint: false, destructiveHint: true },
+    annotations: { title: 'Run Approved Command', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description: `Escape hatch for edge cases not covered by structured tools. Hard-blocked patterns enforced. Limited to ${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION} uses per session. Always dry_run=true first. USE THIS to execute commands yourself — never hand the user a command string for them to paste into a shell. If a structured tool exists (get_pm2_status, git_status, deploy, etc.) prefer it over this escape hatch. If you hit a RED block, explain the block to the user, do not rephrase to bypass it.`,
     inputSchema: {
       type: 'object',
@@ -3571,7 +3571,7 @@ export const TOOLS = [
   },
   {
     name: 'get_job_status',
-    annotations: { title: 'Get Job Status', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get Job Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Check the status and output of a background command job started by run_approved_command with run_in_background=true. Omit job_id to list all jobs this session. USE THIS — never ask the user to paste background job output or run `ps`/`jobs`/`tail` manually; poll here.',
     inputSchema: {
       type: 'object',
@@ -3583,7 +3583,7 @@ export const TOOLS = [
   },
   {
     name: 'deploy',
-    annotations: { title: 'Deploy Application', readOnlyHint: false, destructiveHint: true },
+    annotations: { title: 'Deploy Application', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description: 'Deploy the configured application at APP_DIR on this VM. Runs: git pull -> pnpm install -> node build.mjs -> pm2 restart sharpedge-api -> pm2 status. Works on any cloud VM (AWS, GCP, Azure, DigitalOcean, self-hosted). Always dry_run=true first to preview. USE THIS — never ask the user to run deploy commands themselves one-by-one. After a successful deploy, call get_recent_errors to catch build-time failures early.',
     inputSchema: {
       type: 'object',
@@ -3597,7 +3597,7 @@ export const TOOLS = [
   },
   {
     name: 'deploy_vps_mcp',
-    annotations: { title: 'Deploy VPS MCP', readOnlyHint: false, destructiveHint: true },
+    annotations: { title: 'Deploy VPS MCP', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description: 'Run the full vps-control-mcp deploy sequence: git pull → npm install --include=dev → npm run build → pm2 restart vps-mcp → pm2 status. Always dry_run=true first to preview. USE THIS — never ask the user to redeploy this MCP manually. NOTE: restarting vps-mcp drops the SSE connection mid-deploy; run this at the end of a work session, and tell the user to expect a brief disconnect.',
     inputSchema: {
       type: 'object',
@@ -3611,7 +3611,7 @@ export const TOOLS = [
   },
   {
     name: 'read_audit_log',
-    annotations: { title: 'Read Audit Log', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Read Audit Log', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Return the last N lines of the MCP audit log (default 20, max 100). Each line is a JSON object with ts, tool, args, output_chars, and dry_run fields. USE THIS — never ask the user to cat or tail the audit log manually; call this tool directly.',
     inputSchema: {
       type: 'object',
@@ -3623,7 +3623,7 @@ export const TOOLS = [
   },
   {
     name: 'get_deploy_status',
-    annotations: { title: 'Get Deploy Status', readOnlyHint: true, destructiveHint: false },
+    annotations: { title: 'Get Deploy Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Check the status and log of a background deploy job started by deploy or deploy_vps_mcp. Pass job_id from the deploy response. Omit job_id to list all jobs this session. USE THIS — never ask the user to tail deploy logs in their terminal while a job is running; poll here.',
     inputSchema: {
       type: 'object',
