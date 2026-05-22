@@ -3083,6 +3083,12 @@ async function gitPush(dryRun: boolean, description: string): Promise<string> {
   return truncate([stdout, stderr].filter(Boolean).join('\n').trim());
 }
 
+// ─── restart_process rate limiter ────────────────────────────────────────────
+// Prevents runaway restart loops: each process name is limited to one restart
+// per 60 seconds. The cooldown is session-scoped (resets on vps-mcp restart).
+const RESTART_COOLDOWN_MS = 60_000;
+const _restartLastFired = new Map<string, number>(); // processName → timestamp ms
+
 async function restartProcess(processName: string, dryRun: boolean): Promise<string> {
   validateProcess(processName);
   if (dryRun) {
@@ -3093,6 +3099,20 @@ async function restartProcess(processName: string, dryRun: boolean): Promise<str
       'Call with dry_run=false to execute.',
     ].join('\n');
   }
+
+  // Rate-limit: max 1 restart per process per 60 seconds
+  const lastFired = _restartLastFired.get(processName) ?? 0;
+  const elapsedMs = Date.now() - lastFired;
+  if (elapsedMs < RESTART_COOLDOWN_MS) {
+    const waitSec = Math.ceil((RESTART_COOLDOWN_MS - elapsedMs) / 1000);
+    return (
+      `ERROR [restart_process]: Rate limit — "${processName}" was restarted ` +
+      `${Math.floor(elapsedMs / 1000)}s ago. ` +
+      `Wait ${waitSec}s before retrying (cooldown: 60s per process).`
+    );
+  }
+  _restartLastFired.set(processName, Date.now());
+
   const { stdout } = await exec('pm2', ['restart', processName]);
   return stdout.trim() || `Process "${processName}" restarted successfully.`;
 }
