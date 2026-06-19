@@ -1696,12 +1696,20 @@ async function blockedTierLayer2(cmd: string, context: string): Promise<string |
     // Using all-lines scan instead of only checking the first/last line prevents
     // parse-failures when the model adds a trailing note after the verdict.
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    // Strip leading decoration before matching the verdict keyword. The prompt
+    // lists the verdict options as "- " bullets and models frequently echo the
+    // verdict back bulleted ("- PASS ...") or bolded ("**PASS**"), which made a
+    // plain startsWith() miss it and fall through to the default-BLOCKED
+    // "parse-failure" below — blocking commands the board actually PASSed. The
+    // nonce is still verified against the raw `line`, so this does not weaken
+    // the anti-forgery check.
+    const verdictOf = (l: string) => l.replace(/^[\s>#*_~`."'()\]\[-]+/, '').toUpperCase();
     for (const line of lines) {
-      if (line.toUpperCase().startsWith('BLOCKED')) return line;
+      if (verdictOf(line).startsWith('BLOCKED')) return line;
     }
     // C11: PASS must include the nonce to prove it wasn't forged by prompt injection
     for (const line of lines) {
-      if (line.toUpperCase().startsWith('PASS') && line.includes(nonce)) return null;
+      if (verdictOf(line).startsWith('PASS') && line.includes(nonce)) return null;
     }
     // Default-BLOCKED: unexpected response format treated as unsafe
     console.warn('[BLOCKED-TIER] Layer 2 unexpected response format — defaulting to BLOCKED. Response:', text.slice(0, 200));
@@ -1760,15 +1768,23 @@ async function blockedTierLayer3(cmd: string, context: string): Promise<{ blocke
     // Using all-lines scan instead of only the last line prevents parse-failures when
     // the model appends a trailing note or explanation after the verdict line.
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    // Strip leading decoration before matching the verdict keyword. The prompt
+    // lists the verdict options as "- " bullets and models frequently echo the
+    // verdict back bulleted ("- PASS ...") or bolded ("**PASS**"), which made a
+    // plain startsWith() miss it and fall through to the default-BLOCKED
+    // "parse-failure" below — blocking commands the board actually PASSed. The
+    // nonce is still verified against the raw `line`, so this does not weaken
+    // the anti-forgery check.
+    const verdictOf = (l: string) => l.replace(/^[\s>#*_~`."'()\]\[-]+/, '').toUpperCase();
     for (const line of lines) {
-      if (line.toUpperCase().startsWith('BLOCKED')) return { blocked: line, warning: null };
+      if (verdictOf(line).startsWith('BLOCKED')) return { blocked: line, warning: null };
     }
     for (const line of lines) {
-      if (line.toUpperCase().startsWith('PROCEED WITH CAUTION')) return { blocked: null, warning: `⚠️  SAFETY BOARD WARNING (Layer 3)\n${line}` };
+      if (verdictOf(line).startsWith('PROCEED WITH CAUTION')) return { blocked: null, warning: `⚠️  SAFETY BOARD WARNING (Layer 3)\n${line}` };
     }
     // C11: PASS must include the nonce to prove it wasn't forged by prompt injection
     for (const line of lines) {
-      if (line.toUpperCase().startsWith('PASS') && line.includes(nonce)) return { blocked: null, warning: null };
+      if (verdictOf(line).startsWith('PASS') && line.includes(nonce)) return { blocked: null, warning: null };
     }
     console.warn('[BLOCKED-TIER] Layer 3 unexpected response format — defaulting to BLOCKED. Response:', text.slice(0, 200));
     return { blocked: `BLOCKED: parse-failure — board returned unexpected response format`, warning: null };
