@@ -133,7 +133,7 @@ let customCommandCount = 0;
 // Bounded to 50 entries (FIFO eviction) to prevent unbounded heap growth.
 interface DeployJob {
   id:          string;
-  type:        'app' | 'self';
+  type:        'app' | 'self' | 'client';
   description: string;
   startedAt:   Date;
   status:      'running' | 'success' | 'failed';
@@ -225,7 +225,7 @@ function loadJobFromFile(jobId: string): DeployJob | null {
     if (!raw) return null;
     return {
       id:          raw['id']          as string,
-      type:        raw['type']        as 'app' | 'self',
+      type:        raw['type']        as 'app' | 'self' | 'client',
       description: raw['description'] as string,
       startedAt:   new Date(raw['startedAt'] as string),
       status:      raw['status']      as 'running' | 'success' | 'failed',
@@ -3406,6 +3406,252 @@ async function deployVpsMcp(dryRun: boolean, description: string, confirm: boole
   ].join('\n');
 }
 
+// ─── deploy_client — build the front-end container and publish dist/ to nginx ──
+// Operator-configured, fixed-destination deploy. Where the generic
+// run_approved_command path hard-blocks `cp` into /var, /etc, … (that guardrail is
+// left fully intact), this tool is safe to allow because its publish destination is
+// ALWAYS CONFIG.CLIENT_WEB_ROOT — it is never taken from caller input. The caller
+// supplies only confirm / dry_run; there is no free-form path parameter.
+
+interface ClientDeployConfig {
+  webRoot:     string; // FIXED publish destination ('' = feature disabled)
+  composeFile: string;
+  service:     string;
+  distPath:    string;
+}
+
+function clientDeployConfig(): ClientDeployConfig {
+  return {
+    webRoot:     CONFIG.CLIENT_WEB_ROOT,
+    composeFile: CONFIG.CLIENT_COMPOSE_FILE,
+    service:     CONFIG.CLIENT_SERVICE,
+    distPath:    CONFIG.CLIENT_DIST_PATH,
+  };
+}
+
+// Vite prints "✓ built in 12.34s" when a production build completes. The build runs
+// at container START (~1.5–3 min on this memory-tight droplet; it leans on swap), so
+// we poll the container logs for this marker and must NOT publish before it appears —
+// otherwise we'd copy a half-built dist/.
+const VITE_BUILD_DONE_MARKER = /built in\s/i;
+const CLIENT_BUILD_TAIL_LINES = 200;
+const CLIENT_BUILD_WAIT_TIMEOUT_MS  = 8 * 60 * 1000; // generous for swap-bound builds
+const CLIENT_BUILD_POLL_INTERVAL_MS = 5_000;
+
+function clientSleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Build the FIXED command sequence — a single source of truth shared by the dry-run
+// preview and the executor, so the previewed commands are exactly what runs. The cp
+// destination is derived solely from cfg.webRoot (normalized to a single trailing
+// slash); there is no caller-supplied path anywhere in this sequence.
+function clientDeploySteps(cfg: ClientDeployConfig): Array<{ label: string; cmd: string; args: string[] }> {
+  const composeBase = ['compose', '-f', cfg.composeFile];
+  const dest = cfg.webRoot.replace(/\/+$/, '') + '/'; // always exactly <webRoot>/
+  return [
+    {
+      label: `docker compose -f ${cfg.composeFile} up -d --build ${cfg.service}`,
+      cmd: 'docker',
+      args: [...composeBase, 'up', '-d', '--build', cfg.service],
+    },
+    {
+      label: `wait for in-container vite build to finish ` +
+             `(poll: docker compose -f ${cfg.composeFile} logs --tail ${CLIENT_BUILD_TAIL_LINES} ${cfg.service}; ` +
+             `~1.5–3 min, ${Math.round(CLIENT_BUILD_WAIT_TIMEOUT_MS / 60000)} min timeout)`,
+      cmd: 'docker',
+      args: [...composeBase, 'logs', '--tail', String(CLIENT_BUILD_TAIL_LINES), cfg.service],
+    },
+    {
+      label: `docker compose -f ${cfg.composeFile} cp ${cfg.service}:${cfg.distPath}/. ${dest}`,
+      cmd: 'docker',
+      args: [...composeBase, 'cp', `${cfg.service}:${cfg.distPath}/.`, dest],
+    },
+  ];
+}
+
+// Poll container logs until the vite completion marker appears, or time out.
+async function waitForClientBuild(
+  logArgs: string[],
+  opts?: { timeoutMs?: number; intervalMs?: number },
+): Promise<void> {
+  const timeoutMs  = opts?.timeoutMs  ?? CLIENT_BUILD_WAIT_TIMEOUT_MS;
+  const intervalMs = opts?.intervalMs ?? CLIENT_BUILD_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let out = '';
+    try {
+      const r = await runCmd('docker', logArgs);
+      out = `${r.stdout || ''}\n${r.stderr || ''}`;
+    } catch {
+      // Container may not be accepting `logs` yet right after `up`; keep polling.
+    }
+    if (VITE_BUILD_DONE_MARKER.test(out)) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the in-container vite build ` +
+        `("built in" marker). The build may still be running on this memory-tight droplet (it uses swap). ` +
+        `Nothing was published — re-run deploy_client, or inspect progress with get_deploy_status / ` +
+        `\`docker compose logs ${CONFIG.CLIENT_SERVICE}\`.`,
+      );
+    }
+    await clientSleep(intervalMs);
+  }
+}
+
+function startClientDeployJob(description: string, cfg: ClientDeployConfig): string {
+  const steps = clientDeploySteps(cfg);
+  // F-S68-7: random suffix so parallel calls in the same ms get unique IDs.
+  const id = `deploy-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const job: DeployJob = {
+    id,
+    type:        'client',
+    description,
+    startedAt:   new Date(),
+    status:      'running',
+    log:         ['=== client deploy started ===', `Description: ${description}`, `Publish target: ${cfg.webRoot}`, ''],
+  };
+
+  if (deployJobs.size >= DEPLOY_JOBS_MAX) {
+    const oldest = deployJobs.keys().next().value;
+    if (oldest) deployJobs.delete(oldest);
+  }
+  deployJobs.set(id, job);
+  persistJob(job);
+
+  // Fire-and-forget — returns before steps complete to avoid MCP timeout.
+  (async () => {
+    // a) build the container (in-container vite build starts here)
+    job.log.push(`--- ${steps[0].label} ---`);
+    persistJob(job);
+    try {
+      const r = await runCmd(steps[0].cmd, steps[0].args);
+      if (r.stdout) job.log.push(r.stdout.trim());
+      if (r.stderr) job.log.push(r.stderr.trim());
+    } catch (err) {
+      job.log.push('FAILED: ' + (err as Error).message, '', 'Deploy aborted — container build did not start. Nothing published.');
+      job.status = 'failed';
+      persistJob(job);
+      return;
+    }
+    job.log.push('');
+
+    // b) WAIT for the in-container vite build to finish before publishing
+    job.log.push('--- waiting for in-container vite build ("built in") ---');
+    persistJob(job);
+    try {
+      await waitForClientBuild(steps[1].args);
+      job.log.push('vite build completed.');
+    } catch (err) {
+      job.log.push('FAILED: ' + (err as Error).message);
+      job.status = 'failed';
+      persistJob(job);
+      return;
+    }
+    job.log.push('');
+
+    // c) publish — destination is ALWAYS cfg.webRoot, never caller input
+    job.log.push(`--- ${steps[2].label} ---`);
+    persistJob(job);
+    try {
+      const r = await runCmd(steps[2].cmd, steps[2].args);
+      if (r.stdout) job.log.push(r.stdout.trim());
+      if (r.stderr) job.log.push(r.stderr.trim());
+    } catch (err) {
+      job.log.push('FAILED: ' + (err as Error).message, '', 'Build succeeded but publish (docker compose cp) failed. Web root may be unchanged.');
+      job.status = 'failed';
+      persistJob(job);
+      return;
+    }
+    job.log.push('');
+    job.log.push(`=== Client deploy complete — built + published to ${cfg.webRoot} ===`);
+    job.status = 'success';
+    persistJob(job);
+  })().catch(err => {
+    job.log.push('Unexpected error: ' + (err as Error).message);
+    job.status = 'failed';
+    persistJob(job);
+  });
+
+  return id;
+}
+
+async function deployClient(
+  dryRun: boolean,
+  confirm: boolean,
+  cfg: ClientDeployConfig = clientDeployConfig(),
+): Promise<string> {
+  // 1) Disabled until the operator opts in by setting CLIENT_WEB_ROOT (mirrors ALLOWED_UNITS).
+  if (!cfg.webRoot) {
+    return [
+      'deploy_client is disabled — CLIENT_WEB_ROOT is not set.',
+      '',
+      'To enable: set CLIENT_WEB_ROOT (e.g. /var/www/servicecycle/html) in the vps-control-mcp',
+      'environment (.env or systemd unit) and restart the server. Optional overrides:',
+      'CLIENT_COMPOSE_FILE, CLIENT_SERVICE, CLIENT_DIST_PATH.',
+      '',
+      'No action taken.',
+    ].join('\n');
+  }
+
+  const steps = clientDeploySteps(cfg);
+  const renderSteps = (): string => steps.map((s, i) => `  ${i + 1}. ${s.label}`).join('\n');
+
+  // 2) Preview (default). Prints the exact fixed sequence; executes nothing.
+  //    Ordered before the confirm gate to mirror `deploy` (dry_run short-circuits first).
+  if (dryRun) {
+    return [
+      'DRY RUN — nothing executed.',
+      '',
+      'deploy_client would build the client container and publish its compiled',
+      `dist/ to the FIXED web root: ${cfg.webRoot}`,
+      '',
+      'Exact fixed sequence:',
+      renderSteps(),
+      '',
+      'The publish destination is fixed to CLIENT_WEB_ROOT and cannot be overridden by the caller.',
+      'Call with dry_run=false and confirm=true to execute.',
+    ].join('\n');
+  }
+
+  // 3) Per-invocation confirmation required (ToS §8 + §B.2), exactly like deploy.
+  if (!confirm) {
+    return [
+      '⚠️  DEPLOY CONFIRMATION REQUIRED',
+      '',
+      'This client build + publish pipeline requires explicit per-invocation confirmation before execution.',
+      '',
+      `Publish target:  ${cfg.webRoot}  (fixed — not caller-supplied)`,
+      `Compose file:    ${cfg.composeFile}`,
+      `Service:         ${cfg.service}`,
+      '',
+      'Steps that will execute:',
+      renderSteps(),
+      '',
+      'To confirm: call deploy_client again with confirm=true and dry_run=false.',
+      'Each invocation requires separate confirmation — session-level consent is not accepted.',
+    ].join('\n');
+  }
+
+  // 4) Execute. Audit the confirmed action (ToS §8 + §B.2) before kicking off the job.
+  const auditDescription = `client build + publish to ${cfg.webRoot}`;
+  logDeployConfirmation('deploy_client', auditDescription, cfg.webRoot);
+  auditLog('deploy_client', { dry_run: false, confirm: true, web_root: cfg.webRoot }, 0);
+
+  const jobId = startClientDeployJob(auditDescription, cfg);
+  return [
+    'Client deploy job started: ' + jobId,
+    '',
+    'Steps running in background:',
+    renderSteps(),
+    '',
+    `On success: built in-container, then published ${cfg.service}:${cfg.distPath}/. → ${cfg.webRoot}`,
+    'Use get_deploy_status with job_id="' + jobId + '" to check progress.',
+    'Typical run takes ~2–4 minutes (the in-container vite build dominates).',
+    "Note: index.html is not in nginx's immutable-cache block, so no cache purge is needed.",
+  ].join('\n');
+}
+
 async function getDeployStatus(jobId: string): Promise<string> {
   if (!jobId || !jobId.trim()) {
     // List all jobs if no ID given
@@ -3646,6 +3892,19 @@ export const TOOLS = [
     },
   },
   {
+    name: 'deploy_client',
+    annotations: { title: 'Deploy Client', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    description: 'Build the ServiceCycle client container and publish its compiled dist/ into the configured nginx web root in one approved step: docker compose up -d --build → wait for the in-container vite build to finish → docker compose cp dist/. → CLIENT_WEB_ROOT. Requires CLIENT_WEB_ROOT to be set (otherwise a safe no-op) and confirm=true to execute. The publish destination is FIXED to CLIENT_WEB_ROOT and is never taken from caller input. Always dry_run=true first to preview the exact sequence. USE THIS — never hand the user manual `docker compose cp` commands. Then poll get_deploy_status; the in-container build runs ~2–4 min.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run: { description: 'Default true. Set false (with confirm=true) only after previewing the sequence.' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Required per-invocation (ToS §8). Omit or false returns a confirmation prompt.' },
+      },
+      required: [] as string[],
+    },
+  },
+  {
     name: 'read_audit_log',
     annotations: { title: 'Read Audit Log', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: 'Return the last N lines of the MCP audit log (default 20, max 100). Each line is a JSON object with ts, tool, args, output_chars, and dry_run fields. USE THIS — never ask the user to cat or tail the audit log manually; call this tool directly.',
@@ -3742,6 +4001,10 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await deployApp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
       case 'deploy_vps_mcp':
         return await deployVpsMcp(parseBool(args.dry_run, true), (args.description as string) ?? '', parseBool(args.confirm, false));
+      case 'deploy_client':
+        // Only confirm / dry_run are read — there is no caller-supplied path. The
+        // publish destination is fixed to CONFIG.CLIENT_WEB_ROOT inside deployClient.
+        return await deployClient(parseBool(args.dry_run, true), parseBool(args.confirm, false));
       case 'read_audit_log':
         return await readAuditLog(parseNum(args.lines, 20));
       case 'get_deploy_status':
@@ -3777,4 +4040,9 @@ export const __TEST_ONLY = {
   validateNodeArgs,
   validateNpmArgs,
   validatePm2Args,
+  // deploy_client — fixed-destination client build + publish
+  deployClient,
+  clientDeploySteps,
+  clientDeployConfig,
+  VITE_BUILD_DONE_MARKER,
 };
