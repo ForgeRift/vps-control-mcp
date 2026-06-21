@@ -285,7 +285,7 @@ Paste the contents of [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) at the start of any
 
 ---
 
-**What CLAUDE_CONTEXT.md contains:** all 17 tools and what they do, the full RED/AMBER/GREEN security model with command examples, common gotchas, configuration reference, and diagnostic prompts.
+**What CLAUDE_CONTEXT.md contains:** all 18 tools and what they do, the full RED/AMBER/GREEN security model with command examples, common gotchas, configuration reference, and diagnostic prompts.
 
 Once loaded, try:
 > *"I'm having trouble with [describe issue]. What's the most likely cause given how vps-control-mcp works?"*

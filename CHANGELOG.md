@@ -5,6 +5,47 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased] - 2026-06-20 (deploy_client: one-step client build + publish to nginx web root)
+
+New structured tool `deploy_client` builds the ServiceCycle front-end container
+and publishes its compiled `dist/` into a fixed nginx web root in one approved
+MCP call — no manual `docker compose cp`, no CI. Opt-in and disabled by default.
+
+### Added
+
+- **`deploy_client` tool** (`{ confirm?: boolean, dry_run?: boolean }`). Runs a
+  fixed `execFile` sequence (no shell, no caller paths):
+  1. `docker compose -f $CLIENT_COMPOSE_FILE up -d --build $CLIENT_SERVICE`
+  2. wait for the in-container vite build to finish — polls
+     `docker compose … logs --tail 200 $CLIENT_SERVICE` for the vite `built in`
+     marker (~1.5–3 min on the memory-tight droplet; 8 min timeout, clear error;
+     never publishes a half-built `dist/`).
+  3. `docker compose -f $CLIENT_COMPOSE_FILE cp $CLIENT_SERVICE:$CLIENT_DIST_PATH/. $CLIENT_WEB_ROOT/`
+  Mirrors `deploy`: disabled no-op when `CLIENT_WEB_ROOT` is empty, `dry_run`
+  preview of the exact sequence, per-invocation `confirm` gate, background job
+  polled via `get_deploy_status`, audit + deploy-confirmation logging.
+- **Opt-in config**: `CLIENT_WEB_ROOT` (REQUIRED to enable; empty default =
+  disabled, mirroring `ALLOWED_UNITS`; validated absolute at startup),
+  `CLIENT_COMPOSE_FILE` (default `/root/ServiceCycle/docker-compose.yml`),
+  `CLIENT_SERVICE` (default `client`), `CLIENT_DIST_PATH` (default `/app/dist`).
+
+### Security
+
+- The publish destination is **always** `CLIENT_WEB_ROOT` and is never taken from
+  caller input (the tool accepts only `confirm`/`dry_run`) — that fixed,
+  operator-configured target is what makes the copy safe to allow.
+- The generic `run_approved_command` cp/mv/install-to-system-dir guardrail is
+  **unchanged**: ad-hoc `cp` into `/var/www/…` (or `/etc`, `/usr`, …) is still
+  hard-blocked. Covered by new regression tests.
+
+### Tests
+
+- +13 tests (726 → 739): disabled no-op, confirm gate, exact 3-command dry-run
+  preview, destination-always-`CLIENT_WEB_ROOT` (incl. caller path-like args
+  ignored and schema exposes only `dry_run`/`confirm`), and the cp-to-system-dir
+  block unchanged. `CLIENT_WEB_ROOT` added to `.env.test.fixture`.
+
+
 ## [Unreleased] - 2026-05-13 (MCP spec compliance: full annotation hints on all tools)
 
 Audit pass against Anthropic's "Writing effective tools for agents"

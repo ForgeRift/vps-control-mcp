@@ -35,6 +35,7 @@ Always prefer these over run_approved_command:
 - **restart_process** — restart a PM2 process by name
 - **deploy** — full deploy pipeline (git pull → npm install → build → restart)
 - **deploy_vps_mcp** — specialized deploy of the vps-control-mcp process itself
+- **deploy_client** — build the client container + publish its dist/ to the fixed CLIENT_WEB_ROOT nginx web root (opt-in via CLIENT_WEB_ROOT; requires confirm:true; destination never caller-supplied)
 - **get_deploy_status** — poll a background deploy job
 - **run_approved_command** — run an approved shell command (RED-tier blocked, audited)
 - **get_job_status** — poll output of a background run_approved_command

@@ -17,7 +17,7 @@ When this document is loaded, treat yourself as the user's expert assistant for 
 
 ## What This Plugin Is
 
-**vps-control-mcp** gives Claude a secure, audited connection to a Linux VPS. It runs as a Node.js process on your server, exposes 17 structured tools over HTTPS, and enforces a three-tier security model that hard-blocks dangerous operations at the code level — before any AI review.
+**vps-control-mcp** gives Claude a secure, audited connection to a Linux VPS. It runs as a Node.js process on your server, exposes 18 structured tools over HTTPS, and enforces a three-tier security model that hard-blocks dangerous operations at the code level — before any AI review.
 
 **Built by:** ForgeRift LLC  
 **Version:** 1.13.2  
@@ -46,7 +46,7 @@ Every command passes through three security layers before executing:
 
 ---
 
-## The 17 Available Tools
+## The 18 Available Tools
 
 ### Monitoring (read-only, always GREEN)
 - `get_pm2_status` — all PM2 processes: name, status, memory, CPU, uptime, restart count
@@ -68,6 +68,7 @@ Every command passes through three security layers before executing:
 ### Deployment
 - `deploy` — full pipeline: pull → install → build → restart → health check (AMBER)
 - `deploy_vps_mcp` — specialized deploy of the vps-control-mcp process itself (AMBER)
+- `deploy_client` — build the client container + publish its `dist/` to the fixed `CLIENT_WEB_ROOT` nginx web root (AMBER; opt-in, disabled until `CLIENT_WEB_ROOT` is set; requires `confirm:true`; destination never caller-supplied)
 - `get_deploy_status` — poll a background deploy job (GREEN)
 
 ### Process Control
@@ -214,6 +215,8 @@ If the audit log shows activity you didn't authorize:
 | `APP_DIR` | Root dir for allowed file reads and git ops |
 | `ALLOWED_READ_DIRS` | Comma-separated dirs Claude can read |
 | `ALLOWED_PROCESSES` | PM2 process names Claude can restart |
+| `CLIENT_WEB_ROOT` | Enables `deploy_client`; fixed nginx web root the client `dist/` is published to (empty = disabled; validated absolute) |
+| `CLIENT_COMPOSE_FILE` / `CLIENT_SERVICE` / `CLIENT_DIST_PATH` | `deploy_client` compose file / service / in-container dist path (defaults: `/root/ServiceCycle/docker-compose.yml`, `client`, `/app/dist`) |
 | `PM2_LOG_DIR` | Where PM2 writes logs |
 | `AUDIT_LOG_PATH` | Immutable audit trail location |
 | `BYPASS_BINARIES` | `process:category` pairs exempt from blocking (logged as `[SECURITY-BYPASS]`) |

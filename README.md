@@ -84,6 +84,10 @@ All configuration is optional except `MCP_AUTH_TOKEN`.
 | `LAYER_STRICT_MODE` | true | If false, Layer 2/3 failures pass-through rather than block (fail-closed by default) |
 | `ALLOWED_PROCESSES` | — | Comma-separated PM2 process names (e.g., "myapp,vps-mcp") |
 | `ALLOWED_READ_DIRS` | — | Comma-separated directories Claude can read (e.g., "/app,/var/log") |
+| `CLIENT_WEB_ROOT` | — | **Enables `deploy_client`.** Fixed nginx web root the built client `dist/` is published to (e.g. `/var/www/servicecycle/html`). Empty = tool disabled. Validated absolute. |
+| `CLIENT_COMPOSE_FILE` | /root/ServiceCycle/docker-compose.yml | Compose file `deploy_client` builds with |
+| `CLIENT_SERVICE` | client | Compose service `deploy_client` builds/copies from |
+| `CLIENT_DIST_PATH` | /app/dist | In-container path of the compiled client assets |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
 | `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors and get_recent_output |
@@ -119,10 +123,11 @@ All configuration is optional except `MCP_AUTH_TOKEN`.
 - `git_pull` — Fetch and merge from origin
 - `git_push` — Push commits to origin
 
-### Deployment (3 tools)
+### Deployment (4 tools)
 
 - `deploy` — Full sequence: pull → install → build → restart → health check
 - `deploy_vps_mcp` — Specialized deploy for this server itself
+- `deploy_client` — Build the client container and publish its `dist/` to a **fixed** nginx web root (`CLIENT_WEB_ROOT`): `compose up -d --build` → wait for the in-container vite build → `compose cp dist/. → CLIENT_WEB_ROOT`. Opt-in (set `CLIENT_WEB_ROOT`); requires `confirm:true`. Destination is never caller-supplied.
 - `get_deploy_status` — Poll a background deploy job
 
 ![Deploy pipeline demo](docs/media/vps-control_03_deploy.gif)

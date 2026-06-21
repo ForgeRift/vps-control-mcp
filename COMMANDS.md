@@ -357,8 +357,9 @@ If you have a legitimate need for something in this list, you'll need to SSH int
 ---
 
 ### Sensitive Path Writes
-**What it is:** Writing files to `/etc/`, `/bin/`, `/sbin/`, `/usr/bin/`, `/lib/`, or other system directories
-**Why blocked:** Writing to system directories is how attackers replace legitimate binaries with malicious ones (binary hijacking). Legitimate application deployments write to `/var/www/`, `/opt/`, or user home directories — not system paths.
+**What it is:** Writing files to `/etc/`, `/bin/`, `/sbin/`, `/usr/bin/`, `/lib/`, `/var/`, or other system directories — including ad-hoc `cp`/`mv`/`install` into them
+**Why blocked:** Writing to system directories is how attackers replace legitimate binaries with malicious ones (binary hijacking). This block is unconditional: even copying a freshly built front-end into `/var/www/` via a raw `cp` is refused.
+**Legitimate path:** Publishing the ServiceCycle client into its nginx web root is done by the dedicated, audited **`deploy_client`** tool — never by ad-hoc `cp`. That tool's destination is fixed to the operator-configured `CLIENT_WEB_ROOT` and is never taken from your input, which is what makes it safe to allow while this generic guardrail stays fully intact.
 
 ---
 
@@ -381,6 +382,9 @@ The RED tier is not configurable — those are hard limits in the plugin code. T
 
 **Q: What happens if I try a RED command?**
 Claude will tell you it's blocked, explain which category triggered it, and offer to help you accomplish the underlying goal by writing the commands for you to run manually via SSH.
+
+**Q: How do I deploy the ServiceCycle client / publish it to nginx?**
+Ask Claude to run **`deploy_client`** (preview with `dry_run` first, then `confirm:true`). It builds the client container, waits for the in-container vite build to finish, and copies the compiled `dist/` into the fixed `CLIENT_WEB_ROOT` web root — no manual `docker compose cp`. The tool is disabled until the operator sets `CLIENT_WEB_ROOT` in the server environment. Ad-hoc `cp` into `/var/www/` remains blocked.
 
 **Q: How do I see what commands were run?**
 Ask Claude: *"Show me the audit log"* — every command attempt (including blocked ones) is logged with a timestamp. Or SSH in and check `/root/vps-control-mcp/audit.log` directly.
