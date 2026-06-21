@@ -3456,9 +3456,9 @@ function clientDeploySteps(cfg: ClientDeployConfig): Array<{ label: string; cmd:
       args: [...composeBase, 'up', '-d', '--build', cfg.service],
     },
     {
-      label: `wait for in-container vite build to finish ` +
-             `(poll: docker compose -f ${cfg.composeFile} logs --tail ${CLIENT_BUILD_TAIL_LINES} ${cfg.service}; ` +
-             `~1.5–3 min, ${Math.round(CLIENT_BUILD_WAIT_TIMEOUT_MS / 60000)} min timeout)`,
+      label: `wait for the in-container vite build to finish — poll ` +
+             `docker compose -f ${cfg.composeFile} logs --tail ${CLIENT_BUILD_TAIL_LINES} ${cfg.service} ` +
+             `for the vite "built in" marker (~1.5–3 min, ${Math.round(CLIENT_BUILD_WAIT_TIMEOUT_MS / 60000)} min timeout)`,
       cmd: 'docker',
       args: [...composeBase, 'logs', '--tail', String(CLIENT_BUILD_TAIL_LINES), cfg.service],
     },

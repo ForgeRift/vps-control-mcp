@@ -12,7 +12,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { __TEST_ONLY } from '../tools.js';
+import { __TEST_ONLY, TOOLS, executeTool } from '../tools.js';
+import { CONFIG } from '../config.js';
 import { callerIp } from '../http-utils.js';
 
 const {
@@ -28,6 +29,8 @@ const {
   SENSITIVE_FILE_PATTERNS,
   CATASTROPHIC_PATTERN_SHAPES,
   POSITIVE_ALLOWLIST,
+  deployClient,
+  clientDeploySteps,
 } = __TEST_ONLY;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1624,4 +1627,114 @@ describe('FP-VPS-011 — shell-metachar early detection', () => {
     try { validateAgainstAllowlist('grep "a|b" /tmp/testapp/foo'); }
     catch (e) { assert.doesNotMatch((e as Error).message, /shell-metachar/); }
   });
+});
+
+// ─── deploy_client — fixed-destination client build + publish ─────────────────
+// CLIENT_WEB_ROOT is set in .env.test (=/var/www/servicecycle/html), so the wired
+// executeTool path runs in "enabled" mode. The disabled branch is exercised by
+// calling the testable deployClient(...) overload with an empty webRoot.
+describe('deploy_client — disabled when CLIENT_WEB_ROOT unset', () => {
+  const disabledCfg = { webRoot: '', composeFile: '/x.yml', service: 'client', distPath: '/app/dist' };
+
+  it('returns a clear "disabled; set CLIENT_WEB_ROOT" no-op message', async () => {
+    const out = await deployClient(true, false, disabledCfg);
+    assert.match(out, /disabled/i);
+    assert.match(out, /CLIENT_WEB_ROOT/);
+    assert.match(out, /No action taken/i);
+  });
+
+  it('never previews or starts a job when disabled — even with confirm=true', async () => {
+    const out = await deployClient(false, true, disabledCfg);
+    assert.match(out, /disabled/i);
+    assert.doesNotMatch(out, /job started/i);
+    assert.doesNotMatch(out, /DRY RUN/);
+  });
+});
+
+describe('deploy_client — confirmation gate (enabled)', () => {
+  it('confirm:false (dry_run:false) returns a confirmation prompt and executes nothing', async () => {
+    const out = await executeTool('deploy_client', { dry_run: false, confirm: false });
+    assert.match(out, /CONFIRMATION REQUIRED/);
+    assert.match(out, new RegExp(CONFIG.CLIENT_WEB_ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    // No background job is started from the confirm-prompt path.
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('missing confirm defaults to false → confirmation prompt (no execution)', async () => {
+    const out = await executeTool('deploy_client', { dry_run: false });
+    assert.match(out, /CONFIRMATION REQUIRED/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+});
+
+describe('deploy_client — dry_run previews the exact 3-command sequence', () => {
+  it('default (dry_run omitted → true) previews and executes nothing', async () => {
+    const out = await executeTool('deploy_client', {});
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('preview contains the three fixed commands in order', async () => {
+    const out = await executeTool('deploy_client', { dry_run: true });
+    const root = CONFIG.CLIENT_WEB_ROOT;
+    // a) build  b) wait/poll logs for the vite "built in" marker  c) publish via cp
+    assert.match(out, /up -d --build client/);
+    assert.match(out, /logs --tail 200 client/);
+    assert.match(out, /built in/);                         // the wait marker is described
+    assert.match(out, /cp client:\/app\/dist\/\. /);
+    assert.ok(out.includes(`${root}/`), 'preview must show the fixed publish destination');
+  });
+});
+
+describe('deploy_client — publish destination is ALWAYS CLIENT_WEB_ROOT', () => {
+  it('clientDeploySteps cp destination is exactly <webRoot>/ regardless of other config', () => {
+    const steps = clientDeploySteps({
+      webRoot: '/var/www/sc/html', composeFile: '/c.yml', service: 'client', distPath: '/app/dist',
+    });
+    assert.equal(steps.length, 3);
+    const cp = steps[2];
+    assert.ok(cp.args.includes('cp'));
+    assert.equal(cp.args[cp.args.length - 1], '/var/www/sc/html/');
+    assert.equal(cp.args[cp.args.length - 2], 'client:/app/dist/.');
+  });
+
+  it('a trailing slash in webRoot is normalized (no double slash)', () => {
+    const steps = clientDeploySteps({
+      webRoot: '/var/www/sc/html/', composeFile: '/c.yml', service: 'client', distPath: '/app/dist',
+    });
+    assert.equal(steps[2].args[steps[2].args.length - 1], '/var/www/sc/html/');
+  });
+
+  it('caller-supplied path-like args cannot influence the destination', async () => {
+    // executeTool reads only dry_run / confirm; these extra keys must be ignored.
+    const out = await executeTool('deploy_client', {
+      dry_run: true,
+      web_root: '/tmp/evil',
+      destination: '/tmp/evil/x',
+      dist_path: '/tmp/evil',
+      service: '/tmp/evil',
+      path: '/tmp/evil',
+    } as Record<string, unknown>);
+    assert.ok(out.includes(`${CONFIG.CLIENT_WEB_ROOT}/`), 'destination stays fixed to CLIENT_WEB_ROOT');
+    assert.doesNotMatch(out, /\/tmp\/evil/);
+  });
+
+  it('the deploy_client tool schema exposes only dry_run / confirm (no path inputs)', () => {
+    const tool = TOOLS.find(t => t.name === 'deploy_client');
+    assert.ok(tool, 'deploy_client must be registered in TOOLS');
+    const props = Object.keys((tool as { inputSchema: { properties: Record<string, unknown> } }).inputSchema.properties);
+    assert.deepEqual(props.sort(), ['confirm', 'dry_run']);
+  });
+});
+
+// The dedicated tool publishing into the web root must NOT have weakened the
+// generic guardrail: ad-hoc `cp` into a system dir via run_approved_command is
+// still hard-blocked, including into CLIENT_WEB_ROOT itself.
+describe('deploy_client — generic cp-to-system-dir block is UNCHANGED', () => {
+  it('blocks ad-hoc cp into the client web root', () =>
+    expectBlocked('cp /app/dist/index.html /var/www/servicecycle/html/index.html'));
+  it('blocks ad-hoc recursive cp into the client web root', () =>
+    expectBlocked('cp -r dist/. /var/www/servicecycle/html/'));
+  it('still blocks cp into /etc (unaffected by deploy_client)', () =>
+    expectBlocked('cp evil.conf /etc/cron.d/evil'));
 });
