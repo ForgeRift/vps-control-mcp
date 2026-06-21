@@ -71,6 +71,24 @@ function validateAuditLogPath(p: string): string {
 // extra configuration.
 const APP_DIR = requireEnv('APP_DIR', '/root/myapp');
 
+// CLIENT_WEB_ROOT is the FIXED publish destination for the deploy_client tool.
+// Empty default = the feature is disabled (mirrors ALLOWED_UNITS): deploy_client
+// is a safe no-op until the operator opts in by setting this in the environment.
+// We validate it is an absolute path here so a misconfiguration fails fast at
+// startup rather than at deploy time. We do NOT require the directory to exist
+// (it is created out-of-band by the operator / nginx provisioning).
+function validateClientWebRoot(raw: string | undefined): string {
+  const v = (raw || '').trim();
+  if (!v) return '';
+  if (!path.isAbsolute(v)) {
+    throw new Error(
+      `CLIENT_WEB_ROOT "${v}" must be an absolute path (e.g. /var/www/servicecycle/html). ` +
+      `Leave it empty to disable the deploy_client tool.`
+    );
+  }
+  return v;
+}
+
 export const CONFIG = {
   PORT:           parseInt(process.env.PORT || '3001'),
   // APP_DIR is the absolute path to the user's application on this VM — the
@@ -102,6 +120,21 @@ export const CONFIG = {
   // Default is empty: journalctl remains effectively blocked (every invocation must
   // name a unit, and an empty allowlist matches nothing) until the operator opts in.
   ALLOWED_UNITS: parseProcessList(process.env.ALLOWED_UNITS, []),
+
+  // ── deploy_client tool config (opt-in; empty CLIENT_WEB_ROOT = disabled) ──────
+  // deploy_client builds the front-end container and publishes its compiled dist/
+  // into a fixed nginx web root. The destination is ALWAYS CLIENT_WEB_ROOT and is
+  // never taken from caller input — that fixed, operator-configured target is what
+  // makes the copy safe to allow without weakening the generic cp-to-system-dir
+  // guardrail in run_approved_command.
+  //
+  // CLIENT_WEB_ROOT REQUIRED for the tool to do anything. Validated absolute if set.
+  CLIENT_WEB_ROOT:     validateClientWebRoot(process.env.CLIENT_WEB_ROOT),
+  // Compose file, service name, and in-container dist path. Sensible defaults so a
+  // standard ServiceCycle droplet only needs CLIENT_WEB_ROOT to enable the tool.
+  CLIENT_COMPOSE_FILE: process.env.CLIENT_COMPOSE_FILE || '/root/ServiceCycle/docker-compose.yml',
+  CLIENT_SERVICE:      process.env.CLIENT_SERVICE      || 'client',
+  CLIENT_DIST_PATH:    process.env.CLIENT_DIST_PATH    || '/app/dist',
 };
 
 // Derived — do not edit directly
