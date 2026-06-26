@@ -5,6 +5,57 @@ All notable changes to vps-control-mcp.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased] - 2026-06-21 (ServiceCycle app-operations tools: docker-compose status/logs/migrate/reseed/restart)
+
+ServiceCycle runs as docker-compose containers (`db`, `server-migrate`, `server`,
+`client`), **not** under PM2 — the only PM2 process on the box is the MCP itself.
+So `get_pm2_status` / `get_recent_output` / `get_recent_errors` / `restart_process`
+were blind to the app. Five structured tools close that gap. Each spawns
+`docker compose` via `execFile` (argument array, no shell), against a **fixed**
+compose file (`COMPOSE_FILE`, never caller-supplied), with any service argument
+validated against a strict enum whitelist.
+
+### Added
+
+- **`get_app_status`** (read-only, no params) — `docker compose ps --format json`
+  of the app containers; returns name / service / state / health / status(uptime).
+  Falls back to plain `ps` if the installed compose lacks `--format json`.
+- **`get_app_logs`** (read-only) — `{ service?: server|client|db|server-migrate (default server), lines?: number }`.
+  Runs `docker compose logs --no-color --no-log-prefix --tail=<lines> <service>`;
+  default 50 lines, hard max 200; output run through the ANSI-strip + secret-scrub
+  chokepoint and capped at ~8000 chars.
+- **`migrate_status`** (read-only, no params) — `docker compose exec -T server npx prisma migrate status`
+  (applied vs pending). Surfaces stdout/stderr even on the non-zero exit Prisma
+  returns when migrations are pending.
+- **`reseed_demo`** (mutating; `{ confirm?, dry_run? }`) — wipes & rebuilds the
+  demo data from `scripts/seed-demo.js` (incl. the 5-year history) via
+  `docker compose exec -T server node scripts/seed-demo.js`. Mirrors `deploy_client`:
+  `dry_run` preview, per-invocation `confirm` gate, background job polled via
+  `get_deploy_status`, audit + deploy-confirmation logging.
+- **`restart_app`** (mutating; `{ service?: server|client (default server), confirm?, dry_run? }`)
+  — `docker compose restart <service>`, no rebuild. `dry_run` preview + `confirm` gate.
+- **Config**: `COMPOSE_FILE` (default `/root/ServiceCycle/docker-compose.yml`).
+  Always on; override only if the droplet stores the compose file elsewhere.
+
+### Security
+
+- The compose file is **fixed** to `CONFIG.COMPOSE_FILE` and never taken from
+  caller input; every service argument is a strict enum (no free text), so the
+  read-only tools are safe as first-class fixed-command tools that do **not**
+  route through `run_approved_command` / the L3 safety board (which board-blocks
+  the generic `docker compose exec … seed-demo.js`).
+- The mutating tools reuse the existing `confirm`/`dry_run` gate and audit path;
+  no change to the generic command guardrails. Existing tools unchanged.
+
+### Tests
+
+- +28 tests (739 → 767): tool registration & annotation classification, fixed
+  `compose -f <COMPOSE_FILE>` argv, `validateAppService` strict whitelist
+  (incl. restart-set excluding `db`/`server-migrate` and rejecting non-strings),
+  `parseComposePsJson` (JSONL + array + noise-line tolerance), and the
+  `dry_run`/`confirm` gates for `reseed_demo` / `restart_app` (no execution).
+
+
 ## [Unreleased] - 2026-06-20 (deploy_client: one-step client build + publish to nginx web root)
 
 New structured tool `deploy_client` builds the ServiceCycle front-end container

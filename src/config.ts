@@ -135,6 +135,14 @@ export const CONFIG = {
   CLIENT_COMPOSE_FILE: process.env.CLIENT_COMPOSE_FILE || '/root/ServiceCycle/docker-compose.yml',
   CLIENT_SERVICE:      process.env.CLIENT_SERVICE      || 'client',
   CLIENT_DIST_PATH:    process.env.CLIENT_DIST_PATH    || '/app/dist',
+
+  // ── ServiceCycle app-operations tools (FIXED compose file) ────────────────────
+  // get_app_status / get_app_logs / migrate_status / reseed_demo / restart_app all
+  // operate on this single docker-compose project. The path is operator-config only
+  // and is NEVER taken from caller input — every tool's service argument is a strict
+  // enum whitelist, and the compose file is fixed here. Defaults to the standard
+  // ServiceCycle location; override via COMPOSE_FILE only if the droplet differs.
+  COMPOSE_FILE:        process.env.COMPOSE_FILE        || '/root/ServiceCycle/docker-compose.yml',
 };
 
 // Derived — do not edit directly

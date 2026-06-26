@@ -88,6 +88,7 @@ All configuration is optional except `MCP_AUTH_TOKEN`.
 | `CLIENT_COMPOSE_FILE` | /root/ServiceCycle/docker-compose.yml | Compose file `deploy_client` builds with |
 | `CLIENT_SERVICE` | client | Compose service `deploy_client` builds/copies from |
 | `CLIENT_DIST_PATH` | /app/dist | In-container path of the compiled client assets |
+| `COMPOSE_FILE` | /root/ServiceCycle/docker-compose.yml | Fixed compose file the app-operations tools (`get_app_status`/`get_app_logs`/`migrate_status`/`reseed_demo`/`restart_app`) operate on. Never caller-supplied. |
 | `ALLOWED_REDIRECT_HOSTS` | — | OAuth redirect hosts (e.g., "app.cowork.dev") |
 | `MAX_CUSTOM_COMMANDS_PER_SESSION` | 10 | Limit on run_approved_command calls per session |
 | `MAX_LOG_LINES` | 50 | Lines returned by get_recent_errors and get_recent_output |
@@ -131,6 +132,16 @@ All configuration is optional except `MCP_AUTH_TOKEN`.
 - `get_deploy_status` — Poll a background deploy job
 
 ![Deploy pipeline demo](docs/media/vps-control_03_deploy.gif)
+
+### ServiceCycle App — docker-compose (5 tools)
+
+The app runs as docker-compose containers (`db`, `server-migrate`, `server`, `client`), **not** under PM2, so the PM2 tools above are blind to it. These structured tools operate on the fixed `COMPOSE_FILE`; the service argument is always a strict enum.
+
+- `get_app_status` — `docker compose ps` of the app containers (name/service/state/health/uptime). Read-only.
+- `get_app_logs` — Recent logs for one service (`server`/`client`/`db`/`server-migrate`). Read-only, capped at 200 lines / ~8000 chars.
+- `migrate_status` — Prisma migration status (applied vs pending). Read-only. (Deploys auto-apply migrations via the `server-migrate` init container; this just verifies.)
+- `reseed_demo` — Wipe & rebuild the demo data from `scripts/seed-demo.js` (incl. the 5-year history). Mutating; requires `confirm:true`; runs as a background job (poll `get_deploy_status`).
+- `restart_app` — Restart the `server` or `client` container **without** rebuilding. Mutating; requires `confirm:true`. For a code deploy use `deploy`/`deploy_client` instead.
 
 ### Process Control (1 tool)
 

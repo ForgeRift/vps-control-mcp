@@ -133,7 +133,7 @@ let customCommandCount = 0;
 // Bounded to 50 entries (FIFO eviction) to prevent unbounded heap growth.
 interface DeployJob {
   id:          string;
-  type:        'app' | 'self' | 'client';
+  type:        'app' | 'self' | 'client' | 'reseed';
   description: string;
   startedAt:   Date;
   status:      'running' | 'success' | 'failed';
@@ -225,7 +225,7 @@ function loadJobFromFile(jobId: string): DeployJob | null {
     if (!raw) return null;
     return {
       id:          raw['id']          as string,
-      type:        raw['type']        as 'app' | 'self' | 'client',
+      type:        raw['type']        as 'app' | 'self' | 'client' | 'reseed',
       description: raw['description'] as string,
       startedAt:   new Date(raw['startedAt'] as string),
       status:      raw['status']      as 'running' | 'success' | 'failed',
@@ -235,14 +235,14 @@ function loadJobFromFile(jobId: string): DeployJob | null {
 }
 
 function startDeployJob(
-  type: 'app' | 'self',
+  type: 'app' | 'self' | 'reseed',
   description: string,
   steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }>
 ): string {
   // F-S68-7: append 4-byte random hex so parallel calls within the same millisecond
   // produce unique IDs. Date.now() alone collides on burst invocations.
   const id = `deploy-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  const label = type === 'app' ? 'application' : 'vps-control-mcp';
+  const label = type === 'app' ? 'application' : type === 'reseed' ? 'demo reseed' : 'vps-control-mcp';
   const job: DeployJob = {
     id,
     type,
@@ -490,17 +490,26 @@ export function scrubSecrets(output: string): string {
   return scrubbed;
 }
 
+// Shared scrub + cap. Applies the same ANSI strip + secret-shape redaction
+// chokepoint as truncate(), but at a caller-supplied character limit. truncate()
+// is the canonical MAX_OUTPUT_CHARS entry point; tools that legitimately need a
+// different cap (e.g. get_app_logs at APP_LOG_OUTPUT_CAP) call this directly so
+// they never skip the scrub/strip step.
+function scrubAndCap(output: string, maxChars: number): string {
+  const scrubbed = scrubSecrets(stripAnsi(output));
+  if (scrubbed.length <= maxChars) return scrubbed;
+  return (
+    scrubbed.slice(0, maxChars) +
+    `\n\n[TRUNCATED — ${scrubbed.length} chars total. Only first ${maxChars} shown. Refine your query to narrow results.]`
+  );
+}
+
 function truncate(output: string): string {
   // Apply ANSI strip + secret-shape redaction before the size cap.
   // ANSI strip prevents log-injection (NF-S69-8: ESC sequences hiding content
   // from the human reading rendered output). Secret strip catches API keys /
   // PEM headers / etc. straddling the size cap.
-  const scrubbed = scrubSecrets(stripAnsi(output));
-  if (scrubbed.length <= CONFIG.MAX_OUTPUT_CHARS) return scrubbed;
-  return (
-    scrubbed.slice(0, CONFIG.MAX_OUTPUT_CHARS) +
-    `\n\n[TRUNCATED — ${scrubbed.length} chars total. Only first ${CONFIG.MAX_OUTPUT_CHARS} shown. Refine your query to narrow results.]`
-  );
+  return scrubAndCap(output, CONFIG.MAX_OUTPUT_CHARS);
 }
 
 // ─── Type coercion helpers ────────────────────────────────────────────────────
@@ -3691,6 +3700,249 @@ async function getDeployStatus(jobId: string): Promise<string> {
   return truncate(lines);
 }
 
+// ─── ServiceCycle docker-compose app operations ──────────────────────────────
+// ServiceCycle runs as docker-compose containers (db, server-migrate, server,
+// client), NOT under PM2 — so get_pm2_status / get_recent_output / restart_process
+// are blind to the app. These structured tools close that gap. They are
+// first-class fixed-command tools: each spawns `docker compose` via execFile with
+// an argument array (never a shell string), the compose file is fixed to
+// CONFIG.COMPOSE_FILE (never caller-supplied), and any service argument is a
+// strict enum whitelist. The read-only members deliberately do NOT route through
+// run_approved_command / the L3 safety board — that generic path board-blocks
+// `docker compose exec … seed-demo.js`; a dedicated structured tool does not.
+
+// Strict service whitelists — never free text.
+const APP_LOG_SERVICES     = ['server', 'client', 'db', 'server-migrate'] as const;
+const APP_RESTART_SERVICES = ['server', 'client'] as const;
+type AppLogService     = typeof APP_LOG_SERVICES[number];
+type AppRestartService = typeof APP_RESTART_SERVICES[number];
+
+function validateAppService<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  def: T,
+): T {
+  if (value === undefined || value === null || value === '') return def;
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new Error(
+      `service "${String(value)}" is not permitted. Allowed: ${allowed.join(', ')}.`
+    );
+  }
+  return value as T;
+}
+
+// Build the `docker compose -f <fixed-file> …` argv. The compose file is always
+// CONFIG.COMPOSE_FILE; callers only ever append fixed subcommand tokens.
+function composeArgs(...rest: string[]): string[] {
+  return ['compose', '-f', CONFIG.COMPOSE_FILE, ...rest];
+}
+
+const APP_LOG_DEFAULT_LINES = 50;
+const APP_LOG_MAX_LINES     = 200;
+const APP_LOG_OUTPUT_CAP    = 8000; // hard char cap, like the PM2 log tools cap
+
+// ── get_app_status — docker compose ps ───────────────────────────────────────
+interface ComposePsRow { name: string; service: string; state: string; health: string; status: string; }
+
+function parseComposePsJson(stdout: string): ComposePsRow[] {
+  const text = stdout.trim();
+  if (!text) return [];
+  const raw: Array<Record<string, unknown>> = [];
+  const pushObj = (parsed: unknown): void => {
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      raw.push(parsed as Record<string, unknown>);
+    }
+  };
+  if (text.startsWith('[')) {
+    // Newer compose: a single JSON array.
+    try {
+      const arr = JSON.parse(text) as unknown;
+      if (Array.isArray(arr)) for (const o of arr) pushObj(o);
+    } catch { return []; }
+  } else {
+    // Compose v2: one JSON object per line (JSONL).
+    for (const line of text.split('\n')) {
+      const l = line.trim();
+      if (!l) continue;
+      try { pushObj(JSON.parse(l) as unknown); } catch { /* skip non-JSON line */ }
+    }
+  }
+  const pick = (o: Record<string, unknown>, ...keys: string[]): string => {
+    for (const k of keys) {
+      const v = o[k];
+      if (v !== undefined && v !== null && v !== '') return String(v);
+    }
+    return '';
+  };
+  return raw.map(o => ({
+    name:    pick(o, 'Name', 'name'),
+    service: pick(o, 'Service', 'service'),
+    state:   pick(o, 'State', 'state'),
+    health:  pick(o, 'Health', 'health') || 'n/a',
+    status:  pick(o, 'Status', 'status'),
+  }));
+}
+
+async function getAppStatus(): Promise<string> {
+  // Prefer structured JSON. Fall back to plain `ps` if --format json is
+  // unsupported (older compose) or produced no parseable rows.
+  try {
+    const { stdout } = await exec('docker', composeArgs('ps', '--format', 'json'), { timeout: COMMAND_TIMEOUT_MS });
+    const rows = parseComposePsJson(stdout);
+    if (rows.length > 0) return truncate(JSON.stringify(rows, null, 2));
+    const trimmed = stdout.trim();
+    if (!trimmed || trimmed === '[]') {
+      return `No ServiceCycle containers are running (compose file: ${CONFIG.COMPOSE_FILE}). ` +
+             `The app may be stopped — use deploy/deploy_client to bring it up, or restart_app to bounce a service.`;
+    }
+    // Command succeeded with content but nothing parsed → fall through to plain ps.
+  } catch {
+    // --format json unsupported, or docker/compose not reachable — try plain ps.
+  }
+  const { stdout, stderr } = await exec('docker', composeArgs('ps'), { timeout: COMMAND_TIMEOUT_MS });
+  const out = [stdout, stderr].filter(Boolean).join('\n').trim();
+  return truncate(out || `No ServiceCycle containers found (compose file: ${CONFIG.COMPOSE_FILE}).`);
+}
+
+// ── get_app_logs — docker compose logs <service> ─────────────────────────────
+async function getAppLogs(service: AppLogService, lines: number): Promise<string> {
+  const cappedLines = Math.min(Math.max(1, lines), APP_LOG_MAX_LINES);
+  const { stdout, stderr } = await exec(
+    'docker',
+    composeArgs('logs', '--no-color', '--no-log-prefix', `--tail=${cappedLines}`, service),
+    { timeout: COMMAND_TIMEOUT_MS },
+  );
+  const out = [stdout, stderr].filter(Boolean).join('\n').trim();
+  // scrubAndCap runs the same ANSI-strip + secret-scrub chokepoint as truncate(),
+  // at the app-log char cap. Logs are the most likely place for a leaked secret.
+  return scrubAndCap(
+    out || `[No log output for service "${service}" yet (last ${cappedLines} lines).]`,
+    APP_LOG_OUTPUT_CAP,
+  );
+}
+
+// ── migrate_status — prisma migrate status (read-only) ───────────────────────
+async function migrateStatus(): Promise<string> {
+  try {
+    const { stdout, stderr } = await exec(
+      'docker',
+      composeArgs('exec', '-T', 'server', 'npx', 'prisma', 'migrate', 'status'),
+      { timeout: COMMAND_TIMEOUT_MS },
+    );
+    const out = [stdout, stderr].filter(Boolean).join('\n').trim();
+    return truncate(out || '[No output from prisma migrate status.]');
+  } catch (err) {
+    // `prisma migrate status` exits non-zero when migrations are pending or the DB
+    // is unreachable — the useful diagnostic is on the failed process's stdout/stderr.
+    // Surface that instead of a bare "Command failed".
+    const e = err as { stdout?: string; stderr?: string };
+    const out = [e.stdout, e.stderr].filter(Boolean).map(String).join('\n').trim();
+    if (out) return truncate(out);
+    throw err;
+  }
+}
+
+// ── reseed_demo — wipe & rebuild the demo data (mutating, confirm-gated, async) ──
+async function reseedDemo(dryRun: boolean, confirm: boolean): Promise<string> {
+  const composeFile = CONFIG.COMPOSE_FILE;
+  const steps: Array<{ label: string; cmd: string; args: string[] }> = [{
+    label: `docker compose -f ${composeFile} exec -T server node scripts/seed-demo.js`,
+    cmd:   'docker',
+    args:  composeArgs('exec', '-T', 'server', 'node', 'scripts/seed-demo.js'),
+  }];
+  const renderSteps = (): string => steps.map((s, i) => `  ${i + 1}. ${s.label}`).join('\n');
+
+  // 1) Preview (default). Ordered first so dry_run short-circuits, mirroring deploy_client.
+  if (dryRun) {
+    return [
+      'DRY RUN — nothing executed.',
+      '',
+      "reseed_demo would WIPE the demo account's data and rebuild it from scratch",
+      '(scripts/seed-demo.js, including the 5-year history) inside the running server container.',
+      '',
+      'Exact command:',
+      renderSteps(),
+      '',
+      'Call with dry_run=false and confirm=true to execute.',
+    ].join('\n');
+  }
+
+  // 2) Per-invocation confirmation required (ToS §8 + §B.2), exactly like deploy_client.
+  if (!confirm) {
+    return [
+      '⚠️  RESEED CONFIRMATION REQUIRED',
+      '',
+      'This DESTROYS and rebuilds the ServiceCycle demo data and requires explicit per-invocation confirmation.',
+      '',
+      `Compose file:  ${composeFile}`,
+      "Effect:        wipes the demo account's data, then reseeds it (incl. the 5-year history).",
+      '',
+      'Command that will execute:',
+      renderSteps(),
+      '',
+      'To confirm: call reseed_demo again with confirm=true and dry_run=false.',
+      'Each invocation requires separate confirmation — session-level consent is not accepted.',
+    ].join('\n');
+  }
+
+  // 3) Execute as an async background job (the seed can run long → would hit the MCP
+  //    request timeout if run synchronously). Operator polls get_deploy_status.
+  logDeployConfirmation('reseed_demo', 'reseed ServiceCycle demo data', composeFile);
+  auditLog('reseed_demo', { dry_run: false, confirm: true, compose_file: composeFile }, 0);
+
+  const jobId = startDeployJob('reseed', 'reseed ServiceCycle demo data', steps);
+  return [
+    'Reseed job started: ' + jobId,
+    '',
+    'Running in background:',
+    renderSteps(),
+    '',
+    'Use get_deploy_status with job_id="' + jobId + '" to check progress.',
+    'The seed rebuilds ~5 years of demo history, so this can take a few minutes.',
+  ].join('\n');
+}
+
+// ── restart_app — bounce a service WITHOUT rebuilding (mutating, confirm-gated) ──
+async function restartApp(service: AppRestartService, dryRun: boolean, confirm: boolean): Promise<string> {
+  const composeFile = CONFIG.COMPOSE_FILE;
+  const args     = composeArgs('restart', service);
+  const cmdLabel = `docker compose -f ${composeFile} restart ${service}`;
+
+  if (dryRun) {
+    return [
+      'DRY RUN — nothing executed.',
+      `Would run: ${cmdLabel}`,
+      `This bounces the "${service}" container WITHOUT rebuilding (~a few seconds of downtime for that service only).`,
+      'For a code deploy use deploy / deploy_client (they rebuild) — not this.',
+      'Call with dry_run=false and confirm=true to execute.',
+    ].join('\n');
+  }
+
+  if (!confirm) {
+    return [
+      '⚠️  RESTART CONFIRMATION REQUIRED',
+      '',
+      `This restarts the ServiceCycle "${service}" container and requires explicit per-invocation confirmation.`,
+      '',
+      `Compose file:  ${composeFile}`,
+      `Service:       ${service}`,
+      `Command:       ${cmdLabel}`,
+      '',
+      'To confirm: call restart_app again with confirm=true and dry_run=false.',
+      'Each invocation requires separate confirmation — session-level consent is not accepted.',
+    ].join('\n');
+  }
+
+  logDeployConfirmation('restart_app', `restart ${service}`, composeFile);
+  auditLog('restart_app', { service, dry_run: false, confirm: true }, 0);
+
+  const { stdout, stderr } = await exec('docker', args, { timeout: COMMAND_TIMEOUT_MS });
+  const out = [stdout, stderr].filter(Boolean).join('\n').trim();
+  return truncate(
+    out || `Service "${service}" restarted. Follow up with get_app_status to confirm it came back healthy.`,
+  );
+}
+
 // Tool description convention:
 //   Every description begins with a short "what it does" sentence and then an
 //   explicit "USE THIS — never ask the user to …" anti-pattern clause. The user
@@ -3837,6 +4089,37 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: {}, required: [] as string[] },
   },
   {
+    name: 'get_app_status',
+    annotations: { title: 'Get App Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description: 'Get docker-compose status of the ServiceCycle app containers (db, server-migrate, server, client) — name, service, state, health, status (uptime). Read-only, no side effects. USE THIS — ServiceCycle runs as docker-compose containers, so get_pm2_status (PM2-only) does NOT show the app; never ask the user to SSH and run `docker compose ps`.',
+    inputSchema: { type: 'object', properties: {}, required: [] as string[] },
+  },
+  {
+    name: 'get_app_logs',
+    annotations: { title: 'Get App Logs', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description: `Read recent logs for one ServiceCycle docker-compose service. Read-only, capped at ${APP_LOG_MAX_LINES} lines / ~${APP_LOG_OUTPUT_CAP} chars. USE THIS — get_recent_output/get_recent_errors read only the PM2 MCP process, NOT the app containers; never ask the user to run \`docker compose logs\`.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        service: {
+          type: 'string',
+          enum: [...APP_LOG_SERVICES],
+          description: `Which service to read. One of: ${APP_LOG_SERVICES.join(', ')}. Default server.`,
+        },
+        lines: {
+          description: `Lines to retrieve. Default ${APP_LOG_DEFAULT_LINES}. Hard max ${APP_LOG_MAX_LINES}.`,
+        },
+      },
+      required: [] as string[],
+    },
+  },
+  {
+    name: 'migrate_status',
+    annotations: { title: 'Migration Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description: 'Show Prisma migration status for ServiceCycle (applied vs pending), via `docker compose exec server npx prisma migrate status`. Read-only. Deploys auto-apply migrations through the server-migrate init container; this just verifies. USE THIS — never ask the user to SSH and run prisma migrate status.',
+    inputSchema: { type: 'object', properties: {}, required: [] as string[] },
+  },
+  {
     name: 'run_approved_command',
     annotations: { title: 'Run Approved Command', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description: `Escape hatch for edge cases not covered by structured tools. Hard-blocked patterns enforced. Limited to ${CONFIG.MAX_CUSTOM_COMMANDS_PER_SESSION} uses per session. Always dry_run=true first. USE THIS to execute commands yourself — never hand the user a command string for them to paste into a shell. If a structured tool exists (get_pm2_status, git_status, deploy, etc.) prefer it over this escape hatch. If you hit a RED block, explain the block to the user, do not rephrase to bypass it.`,
@@ -3899,6 +4182,37 @@ export const TOOLS = [
       type: 'object',
       properties: {
         dry_run: { description: 'Default true. Set false (with confirm=true) only after previewing the sequence.' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Required per-invocation (ToS §8). Omit or false returns a confirmation prompt.' },
+      },
+      required: [] as string[],
+    },
+  },
+  {
+    name: 'reseed_demo',
+    annotations: { title: 'Reseed Demo Data', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    description: 'Reset & reseed the ServiceCycle DEMO data from scripts/seed-demo.js (wipes the demo account\'s data and rebuilds it, including the 5-year history) via `docker compose exec server node scripts/seed-demo.js`. Requires confirm=true. Runs as a background job (poll get_deploy_status). Always dry_run=true first to preview. USE THIS for demo refreshes — never ask the user to SSH and run the seed script.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run: { description: 'Default true. Set false (with confirm=true) only after previewing.' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Required per-invocation (ToS §8). Omit or false returns a confirmation prompt.' },
+      },
+      required: [] as string[],
+    },
+  },
+  {
+    name: 'restart_app',
+    annotations: { title: 'Restart App Service', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    description: 'Restart a ServiceCycle docker-compose service (server or client) WITHOUT rebuilding, via `docker compose restart <service>`. Requires confirm=true. For a code deploy use deploy/deploy_client (they rebuild); use this only to bounce a wedged container. Always dry_run=true first. USE THIS — never ask the user to SSH and run `docker compose restart`; then follow up with get_app_status to confirm it came back healthy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        service: {
+          type: 'string',
+          enum: [...APP_RESTART_SERVICES],
+          description: `Service to restart. One of: ${APP_RESTART_SERVICES.join(', ')}. Default server.`,
+        },
+        dry_run: { description: 'Default true. Set false (with confirm=true) only after previewing.' },
         confirm: { type: 'boolean', description: 'Must be true to execute. Required per-invocation (ToS §8). Omit or false returns a confirmation prompt.' },
       },
       required: [] as string[],
@@ -3993,6 +4307,23 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await restartProcess(args.process_name as string, parseBool(args.dry_run, true));
       case 'get_system_health':
         return await getSystemHealth();
+      case 'get_app_status':
+        return await getAppStatus();
+      case 'get_app_logs':
+        return await getAppLogs(
+          validateAppService(args.service, APP_LOG_SERVICES, 'server'),
+          parseNum(args.lines, APP_LOG_DEFAULT_LINES),
+        );
+      case 'migrate_status':
+        return await migrateStatus();
+      case 'reseed_demo':
+        return await reseedDemo(parseBool(args.dry_run, true), parseBool(args.confirm, false));
+      case 'restart_app':
+        return await restartApp(
+          validateAppService(args.service, APP_RESTART_SERVICES, 'server'),
+          parseBool(args.dry_run, true),
+          parseBool(args.confirm, false),
+        );
       case 'run_approved_command':
         return await runApprovedCommand(args.command as string, args.justification as string, parseBool(args.dry_run, true), parseBool(args.run_in_background, false));
       case 'get_job_status':
@@ -4045,4 +4376,14 @@ export const __TEST_ONLY = {
   clientDeploySteps,
   clientDeployConfig,
   VITE_BUILD_DONE_MARKER,
+  // ServiceCycle docker-compose app operations
+  validateAppService,
+  composeArgs,
+  parseComposePsJson,
+  reseedDemo,
+  restartApp,
+  APP_LOG_SERVICES,
+  APP_RESTART_SERVICES,
+  APP_LOG_MAX_LINES,
+  APP_LOG_OUTPUT_CAP,
 };

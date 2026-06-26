@@ -31,6 +31,12 @@ const {
   POSITIVE_ALLOWLIST,
   deployClient,
   clientDeploySteps,
+  validateAppService,
+  composeArgs,
+  parseComposePsJson,
+  reseedDemo,
+  APP_LOG_SERVICES,
+  APP_RESTART_SERVICES,
 } = __TEST_ONLY;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1737,4 +1743,215 @@ describe('deploy_client — generic cp-to-system-dir block is UNCHANGED', () => 
     expectBlocked('cp -r dist/. /var/www/servicecycle/html/'));
   it('still blocks cp into /etc (unaffected by deploy_client)', () =>
     expectBlocked('cp evil.conf /etc/cron.d/evil'));
+});
+
+// ─── ServiceCycle docker-compose app-operations tools ─────────────────────────
+// get_app_status / get_app_logs / migrate_status (read-only) and reseed_demo /
+// restart_app (mutating, confirm-gated). These spawn `docker compose` with a fixed
+// compose file and a strict service enum. Execution paths that would actually shell
+// out to docker are not exercised here (no docker in CI); we cover registration,
+// schema shape, the fixed-compose-file argv, the service-enum whitelist, the
+// JSON parser, and the dry_run/confirm gates (which short-circuit before any spawn).
+
+describe('app-ops tools — registration & schema', () => {
+  it('all five tools are registered in TOOLS', () => {
+    for (const name of ['get_app_status', 'get_app_logs', 'migrate_status', 'reseed_demo', 'restart_app']) {
+      assert.ok(TOOLS.find(t => t.name === name), `${name} must be registered in TOOLS`);
+    }
+  });
+
+  it('read-only tools are classified readOnlyHint:true, non-destructive', () => {
+    for (const name of ['get_app_status', 'get_app_logs', 'migrate_status']) {
+      const t = TOOLS.find(tool => tool.name === name) as unknown as { annotations: Record<string, boolean> };
+      assert.equal(t.annotations.readOnlyHint, true, `${name} readOnlyHint`);
+      assert.equal(t.annotations.destructiveHint, false, `${name} destructiveHint`);
+    }
+  });
+
+  it('mutating tools are classified destructiveHint:true, not read-only', () => {
+    for (const name of ['reseed_demo', 'restart_app']) {
+      const t = TOOLS.find(tool => tool.name === name) as unknown as { annotations: Record<string, boolean> };
+      assert.equal(t.annotations.readOnlyHint, false, `${name} readOnlyHint`);
+      assert.equal(t.annotations.destructiveHint, true, `${name} destructiveHint`);
+    }
+  });
+
+  it('get_app_status / migrate_status take no parameters', () => {
+    for (const name of ['get_app_status', 'migrate_status']) {
+      const t = TOOLS.find(tool => tool.name === name) as unknown as { inputSchema: { properties: Record<string, unknown> } };
+      assert.deepEqual(Object.keys(t.inputSchema.properties), []);
+    }
+  });
+
+  it('get_app_logs schema exposes service (enum) + lines only', () => {
+    const t = TOOLS.find(tool => tool.name === 'get_app_logs') as unknown as
+      { inputSchema: { properties: Record<string, { enum?: string[] }> } };
+    assert.deepEqual(Object.keys(t.inputSchema.properties).sort(), ['lines', 'service']);
+    assert.deepEqual(t.inputSchema.properties.service.enum, ['server', 'client', 'db', 'server-migrate']);
+  });
+
+  it('restart_app schema service enum is server|client only (no db / server-migrate)', () => {
+    const t = TOOLS.find(tool => tool.name === 'restart_app') as unknown as
+      { inputSchema: { properties: Record<string, { enum?: string[] }> } };
+    assert.deepEqual(t.inputSchema.properties.service.enum, ['server', 'client']);
+  });
+
+  it('reseed_demo schema exposes only dry_run / confirm (no path / service inputs)', () => {
+    const t = TOOLS.find(tool => tool.name === 'reseed_demo') as unknown as
+      { inputSchema: { properties: Record<string, unknown> } };
+    assert.deepEqual(Object.keys(t.inputSchema.properties).sort(), ['confirm', 'dry_run']);
+  });
+});
+
+describe('app-ops — compose argv is fixed to CONFIG.COMPOSE_FILE', () => {
+  it('composeArgs always emits `compose -f <COMPOSE_FILE> …`', () => {
+    const args = composeArgs('ps', '--format', 'json');
+    assert.deepEqual(args, ['compose', '-f', CONFIG.COMPOSE_FILE, 'ps', '--format', 'json']);
+  });
+
+  it('COMPOSE_FILE defaults to the ServiceCycle compose path', () => {
+    assert.equal(CONFIG.COMPOSE_FILE, '/root/ServiceCycle/docker-compose.yml');
+  });
+});
+
+describe('app-ops — validateAppService strict whitelist', () => {
+  it('accepts every allowed log service', () => {
+    for (const s of APP_LOG_SERVICES) {
+      assert.equal(validateAppService(s, APP_LOG_SERVICES, 'server'), s);
+    }
+  });
+
+  it('defaults to the given default when empty / undefined', () => {
+    assert.equal(validateAppService(undefined, APP_LOG_SERVICES, 'server'), 'server');
+    assert.equal(validateAppService('', APP_LOG_SERVICES, 'server'), 'server');
+    assert.equal(validateAppService(null, APP_LOG_SERVICES, 'server'), 'server');
+  });
+
+  it('rejects unknown service names (no free text)', () => {
+    assert.throws(() => validateAppService('postgres', APP_LOG_SERVICES, 'server'), /not permitted/);
+    assert.throws(() => validateAppService('server; rm -rf /', APP_LOG_SERVICES, 'server'), /not permitted/);
+  });
+
+  it('restart whitelist excludes db and server-migrate', () => {
+    assert.throws(() => validateAppService('db', APP_RESTART_SERVICES, 'server'), /not permitted/);
+    assert.throws(() => validateAppService('server-migrate', APP_RESTART_SERVICES, 'server'), /not permitted/);
+    assert.equal(validateAppService('client', APP_RESTART_SERVICES, 'server'), 'client');
+  });
+
+  it('non-string inputs are rejected', () => {
+    assert.throws(() => validateAppService(42, APP_LOG_SERVICES, 'server'), /not permitted/);
+    assert.throws(() => validateAppService({}, APP_LOG_SERVICES, 'server'), /not permitted/);
+  });
+});
+
+describe('app-ops — parseComposePsJson', () => {
+  it('parses JSONL (one object per line, compose v2)', () => {
+    const jsonl = [
+      '{"Name":"servicecycle-server","Service":"server","State":"running","Health":"healthy","Status":"Up 2 hours (healthy)"}',
+      '{"Name":"servicecycle-db","Service":"db","State":"running","Health":"","Status":"Up 2 hours"}',
+    ].join('\n');
+    const rows = parseComposePsJson(jsonl);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows[0], {
+      name: 'servicecycle-server', service: 'server', state: 'running',
+      health: 'healthy', status: 'Up 2 hours (healthy)',
+    });
+    // empty Health collapses to 'n/a'
+    assert.equal(rows[1].health, 'n/a');
+  });
+
+  it('parses a JSON array (newer compose)', () => {
+    const arr = JSON.stringify([
+      { Name: 'servicecycle-client', Service: 'client', State: 'running', Health: 'healthy', Status: 'Up' },
+    ]);
+    const rows = parseComposePsJson(arr);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].service, 'client');
+  });
+
+  it('returns [] for empty / whitespace output', () => {
+    assert.deepEqual(parseComposePsJson(''), []);
+    assert.deepEqual(parseComposePsJson('   \n  '), []);
+  });
+
+  it('skips non-JSON noise lines without throwing', () => {
+    const mixed = [
+      'time="2026-06-21" level=warning msg="something"',
+      '{"Name":"servicecycle-server","Service":"server","State":"running","Status":"Up"}',
+    ].join('\n');
+    const rows = parseComposePsJson(mixed);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].name, 'servicecycle-server');
+  });
+});
+
+describe('reseed_demo — dry_run preview & confirm gate (no execution)', () => {
+  it('default (dry_run omitted → true) previews and executes nothing', async () => {
+    const out = await executeTool('reseed_demo', {});
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.match(out, /seed-demo\.js/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('dry_run preview shows the fixed compose-file exec command', async () => {
+    const out = await executeTool('reseed_demo', { dry_run: true });
+    assert.ok(out.includes(`-f ${CONFIG.COMPOSE_FILE}`), 'preview must show the fixed compose file');
+    assert.match(out, /exec -T server node scripts\/seed-demo\.js/);
+  });
+
+  it('confirm:false (dry_run:false) returns a confirmation prompt, executes nothing', async () => {
+    const out = await executeTool('reseed_demo', { dry_run: false, confirm: false });
+    assert.match(out, /CONFIRMATION REQUIRED/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('reseedDemo helper requires confirm even with dry_run=false', async () => {
+    const out = await reseedDemo(false, false);
+    assert.match(out, /CONFIRMATION REQUIRED/);
+    assert.doesNotMatch(out, /Reseed job started/);
+  });
+});
+
+describe('restart_app — dry_run preview, confirm gate, service enum', () => {
+  it('default (dry_run omitted → true) previews and executes nothing', async () => {
+    const out = await executeTool('restart_app', {});
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.match(out, /restart server/); // defaults to server
+  });
+
+  it('dry_run preview honors the chosen service', async () => {
+    const out = await executeTool('restart_app', { dry_run: true, service: 'client' });
+    assert.ok(out.includes(`-f ${CONFIG.COMPOSE_FILE}`));
+    assert.match(out, /restart client/);
+  });
+
+  it('confirm:false (dry_run:false) returns a confirmation prompt, executes nothing', async () => {
+    const out = await executeTool('restart_app', { dry_run: false, confirm: false, service: 'server' });
+    assert.match(out, /CONFIRMATION REQUIRED/);
+  });
+
+  it('rejects a service outside the restart whitelist (db) before any execution', async () => {
+    const out = await executeTool('restart_app', { dry_run: true, service: 'db' });
+    assert.match(out, /ERROR \[restart_app\]/);
+    assert.match(out, /not permitted/);
+  });
+});
+
+describe('app-ops — dispatcher routing (no "Unknown tool" fallback)', () => {
+  it('get_app_logs rejects an invalid service via the wired dispatcher', async () => {
+    const out = await executeTool('get_app_logs', { service: 'evil' });
+    assert.match(out, /ERROR \[get_app_logs\]/);
+    assert.match(out, /not permitted/);
+    assert.doesNotMatch(out, /Unknown tool/);
+  });
+
+  it('get_app_status / migrate_status are routed (string result, never "Unknown tool")', async () => {
+    // These shell out to docker; in CI docker is absent so executeTool returns a
+    // caught "ERROR [...]" string. Either way the dispatcher must route them.
+    for (const name of ['get_app_status', 'migrate_status']) {
+      const out = await executeTool(name, {});
+      assert.equal(typeof out, 'string');
+      assert.doesNotMatch(out, /Unknown tool/);
+    }
+  });
 });
