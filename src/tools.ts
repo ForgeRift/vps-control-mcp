@@ -81,6 +81,62 @@ async function exec(
   };
 }
 
+// F-VPS-BUG3: execFile() does NOT forward an extra inherited fd through a custom
+// `stdio` array to the child process — verified empirically (a plain fd shared via
+// execFile's options.stdio never appears in the child; the identical array works
+// correctly when the child is created via spawn() instead). grep needs that shared
+// fd (to read the exact inode validatePath() opened with O_NOFOLLOW, closing the
+// TOCTOU window — see searchFile()), so this dedicated helper bypasses exec()/
+// execFileP() and drives spawn() directly, wiring stdout/stderr up by hand.
+function execWithSharedFd(
+  cmd: string,
+  args: string[],
+  fd: number,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe', fd], env: safeEnv() });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      const e = new Error(`Command timed out after ${timeoutMs / 1000}s`) as Error & { killed?: boolean };
+      e.killed = true;
+      reject(e);
+    }, timeoutMs);
+    // stdout/stderr are guaranteed non-null: we explicitly requested 'pipe' for
+    // both in the stdio array above. TS's spawn() typing can't narrow that, so
+    // guard explicitly rather than non-null-assert.
+    if (!child.stdout || !child.stderr) {
+      reject(new Error('Failed to open stdio pipes for grep child process.'));
+      return;
+    }
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0 || code === null) {
+        resolve({ stdout, stderr });
+      } else {
+        const e = new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stderr}`) as Error & { code?: number };
+        e.code = code ?? undefined;
+        reject(e);
+      }
+    });
+  });
+}
+
 // ─── Git hardening flags (F-OP-45 / sixth-pass F-LT-60) ─────────────────────
 // The repo's own .git/config is attacker-writable if any RCE primitive fires
 // (even transiently), and the dangerous keys run commands during normal git
@@ -569,8 +625,14 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 const APP_DIR_BASENAME = path.basename(CONFIG.APP_DIR);
+// F-VPS-BUG2: the lookahead must except BOTH "ServiceCycle/<more path>" AND the
+// bare "ServiceCycle" string at end-of-input. Without the (\/|$) alternation,
+// `ls -la /root/ServiceCycle` (no trailing slash) failed the exception and was
+// wrongly blocked as "sensitive", even though `ls -la /root/ServiceCycle/foo`
+// worked fine. A sibling directory like /root/ServiceCycleFoo is still
+// correctly caught by the block (it matches neither alternative).
 const APP_DIR_ROOT_CARVEOUT = new RegExp(
-  '\\/root\\/(?!' + escapeRegex(APP_DIR_BASENAME) + '\\/)'
+  '\\/root\\/(?!' + escapeRegex(APP_DIR_BASENAME) + '(\\/|$))'
 );
 
 const SENSITIVE_FILE_PATTERNS: RegExp[] = [
@@ -2135,11 +2197,17 @@ const validateArgPath: ArgValidator = (args) => {
       if (COUNT_FLAGS.has(arg)) skipNext = true;
       continue;
     }
-    // F-OP-33: resolve relative args against process.cwd() before validatePath.
-    // execFile would otherwise resolve the arg against the mcp working directory
-    // at kernel level, letting ../../etc/passwd escape ALLOWED_READ_DIRS entirely.
+    // F-OP-33: resolve relative args against CONFIG.APP_DIR before validatePath.
+    // F-VPS-BUG1: this used to resolve against process.cwd() (the MCP server's own
+    // process cwd, e.g. its install dir) to mirror what execFile would do at kernel
+    // level with no explicit cwd. Now that run_approved_command's exec() call is
+    // pinned to cwd: CONFIG.APP_DIR (see runApprovedCommand), this must resolve
+    // against the same base or a relative arg like the sole "." in
+    // `find . -maxdepth 1` would be wrongly rejected as outside ALLOWED_READ_DIRS
+    // even though it now correctly executes inside CONFIG.APP_DIR. Absolute args are
+    // unaffected -- path.resolve ignores the base once an absolute segment appears.
     try {
-      validatePath(path.resolve(arg));
+      validatePath(path.resolve(CONFIG.APP_DIR, arg));
     } catch (err) {
       return (err as Error).message;
     }
@@ -2996,6 +3064,8 @@ const CATASTROPHIC_PATTERN_SHAPES: RegExp[] = [
   /\.\*\.\*\.\*/,  // .*.*.* — three+ unanchored any-char runs (enough to stall large files)
 ];
 
+const SEARCH_FILE_TIMEOUT_MS = 15_000;
+
 async function searchFile(
   filePath: string,
   pattern: string,
@@ -3014,23 +3084,33 @@ async function searchFile(
 
   // F-S68-8: use fd-based path to eliminate TOCTOU window.
   const { real: safePath, fd } = validatePath(filePath);
-  // /proc/self/fd/N resolves to the already-opened inode — grep follows the fd,
-  // not the original path string, so a post-validation symlink swap is inert.
-  // Fallback to real path if /proc/self/fd is unavailable (non-Linux).
-  const grepTarget = fs.existsSync(`/proc/self/fd/${fd}`) ? `/proc/self/fd/${fd}` : safePath;
   const ctx = Math.min(Math.max(0, contextLines), 10);
 
   try {
+    // F-VPS-BUG3: /proc/self/fd/N is per-process. grep runs as a CHILD
+    // process, and "self" there resolves to the CHILD, whose fd table does
+    // NOT contain our parent-process fd — hence the old code threw "No such
+    // file or directory" on every single call, unconditionally. Empirically,
+    // execFile() also silently drops a custom `stdio` array entry (it never
+    // reaches the child at all — confirmed by direct repro), so this can't be
+    // fixed by passing stdio through the shared exec()/execFileP() helper;
+    // execWithSharedFd() drives spawn() directly instead, which does honor it.
+    // Fix: share `fd` directly into the child's stdio (position 3 in the
+    // array becomes fd 3 inside the child) and point grep at /dev/fd/3 there.
+    // This still preserves the original F-S68-8 intent — grep reads the exact
+    // inode we opened with O_NOFOLLOW, so a symlink swapped in after
+    // validatePath() is inert — without depending on cross-process /proc paths.
+    //
     // F-NEW-19: insert '--' before pattern so a pattern starting with '-'
     // is never interpreted as a grep flag (e.g. pattern="-r /etc/shadow ./")
-    const { stdout } = await exec('grep', [
+    const { stdout } = await execWithSharedFd('grep', [
       '-n',
       `-A${ctx}`,
       `-B${ctx}`,
       '--',
       pattern,
-      grepTarget,
-    ]);
+      '/dev/fd/3',
+    ], fd, SEARCH_FILE_TIMEOUT_MS);
     return truncate(stdout.trim() || 'No matches found.');
   } catch (err) {
     const e = err as { code?: number };
@@ -3246,7 +3326,13 @@ async function runApprovedCommand(
   const parts = command.trim().split(/\s+/);
   const [cmd, ...args] = parts;
   try {
-    const { stdout, stderr } = await exec(cmd, args, { timeout: COMMAND_TIMEOUT_MS });
+    // F-VPS-BUG1: without an explicit cwd, execFile inherits the MCP server
+    // process's own cwd (its install dir, e.g. /root/vps-control-mcp) — not
+    // the app root that read_file_section/search_file resolve against via
+    // ALLOWED_READ_DIRS. Pin it to the same CONFIG.APP_DIR so `ls -la`,
+    // `find . -maxdepth 1`, etc. (no explicit path arg) operate on the app,
+    // matching every other tool's behavior.
+    const { stdout, stderr } = await exec(cmd, args, { cwd: CONFIG.APP_DIR, timeout: COMMAND_TIMEOUT_MS });
     const output = [stdout, stderr].filter(Boolean).join('\n');
     const boardPrefix = boardWarning ? `${boardWarning}\n\n--- Command output ---\n` : '';
     return boardPrefix + amberPrefix + truncate(output.trim() || '[Command completed with no output]');
