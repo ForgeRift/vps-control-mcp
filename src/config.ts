@@ -117,9 +117,17 @@ export const CONFIG = {
 
   // FP-VPS-003: systemd units the operator wants `journalctl -u <unit>` access to.
   // Set ALLOWED_UNITS env var as comma-separated list, e.g. ALLOWED_UNITS=nginx,my-api.
-  // Default is empty: journalctl remains effectively blocked (every invocation must
-  // name a unit, and an empty allowlist matches nothing) until the operator opts in.
-  ALLOWED_UNITS: parseProcessList(process.env.ALLOWED_UNITS, []),
+  // S69: default is the standard ServiceCycle web/TLS/auth-guard unit set so nginx and
+  // certificate issues can be diagnosed through the MCP instead of falling out to SSH.
+  // journalctl still requires an explicit -u naming one of these (no system-wide dump);
+  // set ALLOWED_UNITS in the env to override this list entirely.
+  ALLOWED_UNITS: parseProcessList(process.env.ALLOWED_UNITS, [
+    'nginx.service',
+    'certbot.service',
+    'certbot.timer',
+    'sc-auth-guard.service',
+    'sc-auth-guard.timer',
+  ]),
 
   // ── deploy_client tool config (opt-in; empty CLIENT_WEB_ROOT = disabled) ──────
   // deploy_client builds the front-end container and publishes its compiled dist/
@@ -143,7 +151,22 @@ export const CONFIG = {
   // enum whitelist, and the compose file is fixed here. Defaults to the standard
   // ServiceCycle location; override via COMPOSE_FILE only if the droplet differs.
   COMPOSE_FILE:        process.env.COMPOSE_FILE        || '/root/ServiceCycle/docker-compose.yml',
+
+  // ── Read-only diagnostic dirs (S69) ───────────────────────────────────────────
+  // nginx config + host logs, so `nginx -T`, `cat /etc/nginx/...`, and
+  // `tail /var/log/nginx/error.log` / `/var/log/sc-auth-guard.log` are diagnosable
+  // through the MCP. READ surface only — these are added to ALLOWED_READ_DIRS and
+  // nothing else. Every write/destructive guardrail is unchanged, and the
+  // credential-name patterns in SENSITIVE_FILE_PATTERNS (*.key, *.pem, *password*,
+  // *token*, *credentials*, .htpasswd, ...) still apply INSIDE these directories.
+  NGINX_CONF_DIR:      process.env.NGINX_CONF_DIR      || '/etc/nginx',
+  HOST_LOG_DIR:        process.env.HOST_LOG_DIR        || '/var/log',
 };
 
 // Derived — do not edit directly
-export const ALLOWED_READ_DIRS = [CONFIG.APP_DIR, CONFIG.PM2_LOG_DIR];
+export const ALLOWED_READ_DIRS = [
+  CONFIG.APP_DIR,
+  CONFIG.PM2_LOG_DIR,
+  CONFIG.NGINX_CONF_DIR,
+  CONFIG.HOST_LOG_DIR,
+];

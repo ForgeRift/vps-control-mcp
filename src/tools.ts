@@ -635,6 +635,27 @@ const APP_DIR_ROOT_CARVEOUT = new RegExp(
   '\\/root\\/(?!' + escapeRegex(APP_DIR_BASENAME) + '(\\/|$))'
 );
 
+// S69 (read-widening): /etc/nginx and /var/log are now explicit ALLOWED_READ_DIRS
+// entries so nginx config and host logs are diagnosable through the MCP. The old
+// blanket /etc/ block below is therefore narrowed to "everything under /etc EXCEPT
+// the configured nginx config dir", and the blanket /var/log/ block is dropped —
+// with either one left as-is, the new read-allowlist entries would be dead letters.
+//
+// This is a READ widening only, and it is still layered:
+//   • ALLOWED_READ_DIRS remains the primary gate — /etc/ssl, /etc/systemd, /etc/passwd
+//     are outside the allowlist and rejected there regardless of these patterns.
+//   • Every credential-name pattern above still applies INSIDE /etc/nginx and
+//     /var/log: *.key, *.pem, *.p12, .htpasswd, *password*, *token*, *credentials*
+//     are blocked, so /etc/nginx/ssl/site.key and /etc/nginx/.htpasswd stay unreadable.
+// The carveout only fires when NGINX_CONF_DIR is genuinely a direct child of /etc;
+// if the operator relocates it, /etc stays blocked wholesale.
+const ETC_BLOCK_WITH_NGINX_CARVEOUT = (() => {
+  const m = /^\/etc\/([^/]+)\/?$/.exec(CONFIG.NGINX_CONF_DIR.trim());
+  return m
+    ? new RegExp('\\/etc\\/(?!' + escapeRegex(m[1]) + '(\\/|$))')
+    : /\/etc\//;
+})();
+
 const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   /\.env(?![a-zA-Z0-9])/i,            // .env, .env.local, .env.production, .env", .env), .env/ etc.
   /\.ssh\//,                         // SSH keys
@@ -673,8 +694,10 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   // validateArgPath, but these patterns also catch any literal path that
   // reaches a pattern-only gate (rejectSensitiveArgs). Any access to system
   // config dirs through an MCP tool should be blocked.
-  /\/etc\//,                          // /etc — system configuration
-  /\/var\/log\//,                     // /var/log — host logs (not pm2 app logs)
+  ETC_BLOCK_WITH_NGINX_CARVEOUT,      // /etc — system config, except CONFIG.NGINX_CONF_DIR (S69)
+  // S69: the blanket /var/log/ block is intentionally gone — CONFIG.HOST_LOG_DIR is
+  // an ALLOWED_READ_DIRS entry so nginx + sc-auth-guard logs are readable. Files in
+  // it still pass the credential-name patterns above.
   /\/proc\//,                         // /proc — kernel VFS
   /\/sys\//,                          // /sys — kernel VFS
   // Seventh-pass Opus note: AUDIT_LOG_PATH defaults to /root/mcp-audit.log and is
@@ -2728,6 +2751,36 @@ const validateJournalctlArgs: ArgValidator = (args) => {
   return null;
 };
 
+// S69: nginx restricted to its two read-only diagnostic modes plus version banners.
+// This is a strict positive allowlist rather than a blocklist, because every other
+// nginx invocation is state-changing or an info-leak primitive:
+//   nginx -t   ALLOWED — syntax-test the config (read-only)
+//   nginx -T   ALLOWED — test + dump the FULL effective config (read-only)
+//   nginx -v / -V / -q  ALLOWED — version / build banner / quiet-during-test
+//   nginx      REJECTED — bare invocation STARTS the server (state change)
+//   nginx -s <signal>   REJECTED — stop/quit/reopen/RELOAD (state change)
+//   nginx -c <file>     REJECTED — parses an arbitrary path and can echo its
+//                                  contents back through parser error messages,
+//                                  which would sidestep ALLOWED_READ_DIRS entirely
+//   nginx -g <dirs>     REJECTED — injects global config directives
+//   nginx -p / -e       REJECTED — relocates prefix / error-log destination (write)
+const NGINX_READ_ONLY_FLAGS = new Set(['-t', '-T', '-v', '-V', '-q']);
+const validateNginxArgs: ArgValidator = (args) => {
+  if (args.length === 0) {
+    return 'nginx requires an explicit read-only flag — a bare "nginx" starts the server. ' +
+           `Allowed: ${[...NGINX_READ_ONLY_FLAGS].join(', ')}.`;
+  }
+  for (const a of args) {
+    if (!NGINX_READ_ONLY_FLAGS.has(a)) {
+      return `nginx flag "${a}" is not permitted — only read-only diagnostics are allowed ` +
+             `(${[...NGINX_READ_ONLY_FLAGS].join(', ')}). ` +
+             `Reload/stop (-s), alternate config (-c), and global directives (-g) are blocked; ` +
+             `use systemctl via the appropriate tool or SSH for service state changes.`;
+    }
+  }
+  return null;
+};
+
 interface AllowlistEntry { description: string; argValidator: ArgValidator; }
 const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   // ── System info (safe read-only) ──────────────────────────────────────────
@@ -2805,6 +2858,9 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'service':   { description: 'Service status (read-only)',         argValidator: validateServiceArgs },
   // FP-VPS-003: journalctl restricted to read ops on ALLOWED_UNITS (env-gated).
   'journalctl': { description: 'systemd journal reader (per-unit, ALLOWED_UNITS gated)', argValidator: validateJournalctlArgs },
+  // S69: nginx config diagnostics only — -t (syntax test) / -T (dump effective config).
+  // Reload/stop/alternate-config forms are rejected by validateNginxArgs.
+  'nginx':      { description: 'nginx config test/dump (read-only: -t, -T)', argValidator: validateNginxArgs },
 
   // ── Scheduled job inspection (read-only) — S64 v1.11.0 ──────────────────
   'crontab':  { description: 'List cron jobs (-l only)',            argValidator: validateCrontabArgs },
