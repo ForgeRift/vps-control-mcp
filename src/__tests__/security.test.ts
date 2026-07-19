@@ -843,7 +843,7 @@ describe('F-OP-33 — validateArgPath resolves relative paths before allowlist c
     assert.throws(() => validateAgainstAllowlist(cmd), /BLOCKED \[invalid-args\]/);
   }
   it('cat ../../etc/group is blocked (path not permitted after resolve)', () => expectInvalidArgs('cat ../../etc/group'));
-  // S69: /var/log is now an ALLOWED_READ_DIRS entry, so this case moved to a target
+  // NGINX-DIAG: /var/log is now an ALLOWED_READ_DIRS entry, so this case moved to a target
   // that is still outside the allowlist — the property under test is that relative
   // paths are resolved BEFORE the allowlist check, not that /var/log specifically is denied.
   it('wc ../../etc/passwd is blocked', () => expectInvalidArgs('wc ../../etc/passwd'));
@@ -885,7 +885,7 @@ describe('F-OP-33 sensitive-pattern defence-in-depth', () => {
     assert.ok(srcs.some((s: string) => /\\\/sys\\\//.test(s)), 'expected /sys/ pattern to be present');
   });
 
-  // S69: /var/log's blanket entry was intentionally removed and /etc's was narrowed,
+  // NGINX-DIAG: /var/log's blanket entry was intentionally removed and /etc's was narrowed,
   // so CONFIG.NGINX_CONF_DIR / CONFIG.HOST_LOG_DIR (both now ALLOWED_READ_DIRS
   // entries) are actually reachable. Assert the carveouts are exactly that narrow.
   it('/etc stays blocked outside the nginx config dir', () => {
@@ -895,14 +895,14 @@ describe('F-OP-33 sensitive-pattern defence-in-depth', () => {
     assert.ok(matchesAny('/etc/systemd/system/x.service'), '/etc/systemd must stay blocked');
   });
 
-  it('S69: /etc/nginx and /var/log are no longer pattern-blocked', () => {
+  it('NGINX-DIAG: /etc/nginx and /var/log are no longer pattern-blocked', () => {
     assert.ok(!matchesAny('/etc/nginx/nginx.conf'), '/etc/nginx config must be readable');
     assert.ok(!matchesAny('/etc/nginx/sites-enabled/servicecycle'), 'nginx vhosts must be readable');
     assert.ok(!matchesAny('/var/log/nginx/error.log'), 'nginx error log must be readable');
     assert.ok(!matchesAny('/var/log/sc-auth-guard.log'), 'sc-auth-guard log must be readable');
   });
 
-  it('S69: credential-name blocks still apply INSIDE the newly-readable dirs', () => {
+  it('NGINX-DIAG: credential-name blocks still apply INSIDE the newly-readable dirs', () => {
     assert.ok(matchesAny('/etc/nginx/ssl/site.key'),   'nginx *.key must stay blocked');
     assert.ok(matchesAny('/etc/nginx/ssl/chain.pem'),  'nginx *.pem must stay blocked');
     assert.ok(matchesAny('/etc/nginx/.htpasswd'),      'nginx .htpasswd must stay blocked');
@@ -912,11 +912,11 @@ describe('F-OP-33 sensitive-pattern defence-in-depth', () => {
   });
 });
 
-// ─── S69 — nginx read-only diagnostics ───────────────────────────────────────
+// ─── NGINX-DIAG — nginx read-only diagnostics ───────────────────────────────────────
 // nginx is allowlisted for config inspection ONLY. Bare `nginx` starts the server
 // and `-s reload` restarts workers, so validateNginxArgs is a strict positive
 // allowlist over -t/-T/-v/-V/-q rather than a blocklist of known-bad forms.
-describe('S69 — nginx restricted to read-only config diagnostics', () => {
+describe('NGINX-DIAG — nginx restricted to read-only config diagnostics', () => {
   function expectAllowed(cmd: string) {
     assert.doesNotThrow(() => validateAgainstAllowlist(cmd), `expected "${cmd}" to be allowed`);
   }

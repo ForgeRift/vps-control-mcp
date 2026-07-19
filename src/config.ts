@@ -117,7 +117,7 @@ export const CONFIG = {
 
   // FP-VPS-003: systemd units the operator wants `journalctl -u <unit>` access to.
   // Set ALLOWED_UNITS env var as comma-separated list, e.g. ALLOWED_UNITS=nginx,my-api.
-  // S69: default is the standard ServiceCycle web/TLS/auth-guard unit set so nginx and
+  // NGINX-DIAG: default is the standard ServiceCycle web/TLS/auth-guard unit set so nginx and
   // certificate issues can be diagnosed through the MCP instead of falling out to SSH.
   // journalctl still requires an explicit -u naming one of these (no system-wide dump);
   // set ALLOWED_UNITS in the env to override this list entirely.
@@ -152,7 +152,7 @@ export const CONFIG = {
   // ServiceCycle location; override via COMPOSE_FILE only if the droplet differs.
   COMPOSE_FILE:        process.env.COMPOSE_FILE        || '/root/ServiceCycle/docker-compose.yml',
 
-  // ── Read-only diagnostic dirs (S69) ───────────────────────────────────────────
+  // ── Read-only diagnostic dirs (NGINX-DIAG 2026-07-18) ───────────────────────────────────────────
   // nginx config + host logs, so `nginx -T`, `cat /etc/nginx/...`, and
   // `tail /var/log/nginx/error.log` / `/var/log/sc-auth-guard.log` are diagnosable
   // through the MCP. READ surface only — these are added to ALLOWED_READ_DIRS and

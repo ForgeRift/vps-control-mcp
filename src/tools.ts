@@ -635,7 +635,7 @@ const APP_DIR_ROOT_CARVEOUT = new RegExp(
   '\\/root\\/(?!' + escapeRegex(APP_DIR_BASENAME) + '(\\/|$))'
 );
 
-// S69 (read-widening): /etc/nginx and /var/log are now explicit ALLOWED_READ_DIRS
+// NGINX-DIAG (2026-07-18, read-widening): /etc/nginx and /var/log are now explicit ALLOWED_READ_DIRS
 // entries so nginx config and host logs are diagnosable through the MCP. The old
 // blanket /etc/ block below is therefore narrowed to "everything under /etc EXCEPT
 // the configured nginx config dir", and the blanket /var/log/ block is dropped —
@@ -694,8 +694,8 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   // validateArgPath, but these patterns also catch any literal path that
   // reaches a pattern-only gate (rejectSensitiveArgs). Any access to system
   // config dirs through an MCP tool should be blocked.
-  ETC_BLOCK_WITH_NGINX_CARVEOUT,      // /etc — system config, except CONFIG.NGINX_CONF_DIR (S69)
-  // S69: the blanket /var/log/ block is intentionally gone — CONFIG.HOST_LOG_DIR is
+  ETC_BLOCK_WITH_NGINX_CARVEOUT,      // /etc — system config, except CONFIG.NGINX_CONF_DIR (NGINX-DIAG 2026-07-18)
+  // NGINX-DIAG: the blanket /var/log/ block is intentionally gone — CONFIG.HOST_LOG_DIR is
   // an ALLOWED_READ_DIRS entry so nginx + sc-auth-guard logs are readable. Files in
   // it still pass the credential-name patterns above.
   /\/proc\//,                         // /proc — kernel VFS
@@ -2751,7 +2751,7 @@ const validateJournalctlArgs: ArgValidator = (args) => {
   return null;
 };
 
-// S69: nginx restricted to its two read-only diagnostic modes plus version banners.
+// NGINX-DIAG: nginx restricted to its two read-only diagnostic modes plus version banners.
 // This is a strict positive allowlist rather than a blocklist, because every other
 // nginx invocation is state-changing or an info-leak primitive:
 //   nginx -t   ALLOWED — syntax-test the config (read-only)
@@ -2858,7 +2858,7 @@ const POSITIVE_ALLOWLIST: Record<string, AllowlistEntry> = {
   'service':   { description: 'Service status (read-only)',         argValidator: validateServiceArgs },
   // FP-VPS-003: journalctl restricted to read ops on ALLOWED_UNITS (env-gated).
   'journalctl': { description: 'systemd journal reader (per-unit, ALLOWED_UNITS gated)', argValidator: validateJournalctlArgs },
-  // S69: nginx config diagnostics only — -t (syntax test) / -T (dump effective config).
+  // NGINX-DIAG: nginx config diagnostics only — -t (syntax test) / -T (dump effective config).
   // Reload/stop/alternate-config forms are rejected by validateNginxArgs.
   'nginx':      { description: 'nginx config test/dump (read-only: -t, -T)', argValidator: validateNginxArgs },
 
