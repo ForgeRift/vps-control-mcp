@@ -12,6 +12,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { __TEST_ONLY, TOOLS, executeTool } from '../tools.js';
 import { CONFIG } from '../config.js';
 import { callerIp } from '../http-utils.js';
@@ -29,6 +30,11 @@ const {
   SENSITIVE_FILE_PATTERNS,
   CATASTROPHIC_PATTERN_SHAPES,
   POSITIVE_ALLOWLIST,
+  GIT_HARDENING_FLAGS,
+  deployApp,
+  appDeploySteps,
+  appDeployConfig,
+  assertAppDeployConfigured,
   deployClient,
   clientDeploySteps,
   validateAppService,
@@ -1690,6 +1696,235 @@ describe('FP-VPS-011 — shell-metachar early detection', () => {
   it('grep "a|b" pattern (regex with | inside arg) does not trip shell-metachar', () => {
     try { validateAgainstAllowlist('grep "a|b" /tmp/testapp/foo'); }
     catch (e) { assert.doesNotMatch((e as Error).message, /shell-metachar/); }
+  });
+});
+
+// ─── deploy — env-selected pipeline (legacy pnpm/pm2 vs docker compose) ───────
+// This MCP is shared across droplets that build differently, so `deploy`'s pipeline
+// comes from DEPLOY_MODE / DEPLOY_PROCESS / DEPLOY_SERVICE rather than source. The
+// legacy branch is a compatibility contract: droplets already deploying through it
+// depend on those exact commands, cwds, and ordering, so it is pinned here
+// step-by-step. .env.test leaves DEPLOY_MODE unset (→ legacy) and sets
+// DEPLOY_PROCESS=test-api, so executeTool covers the wired legacy path; compose mode
+// is exercised through the deployApp/appDeploySteps config override.
+
+const LEGACY_CFG = {
+  mode: 'legacy' as const,
+  appDir: '/srv/app',
+  composeFile: '/root/x/docker-compose.yml',
+  service: 'server',
+  process: 'my-api',
+};
+const COMPOSE_CFG = {
+  mode: 'compose' as const,
+  appDir: '/root/ServiceCycle',
+  composeFile: '/root/ServiceCycle/docker-compose.yml',
+  service: 'server',
+  process: '',
+};
+
+describe('deploy — legacy mode pipeline is UNCHANGED (SharpEdge compatibility)', () => {
+  it('produces exactly the historical 5-step sequence, in order', () => {
+    const steps = appDeploySteps(LEGACY_CFG);
+    assert.equal(steps.length, 5);
+
+    // 1. hardened git pull in APP_DIR
+    assert.equal(steps[0].cmd, 'git');
+    assert.deepEqual(steps[0].args.slice(0, 2), ['-C', '/srv/app']);
+    assert.deepEqual(steps[0].args.slice(-3), ['pull', 'origin', 'main']);
+
+    // 2. pnpm install at the app root
+    assert.equal(steps[1].cmd, 'pnpm');
+    assert.deepEqual(steps[1].args, ['install']);
+    assert.equal(steps[1].cwd, '/srv/app');
+
+    // 3. node build.mjs in artifacts/api-server
+    assert.equal(steps[2].cmd, 'node');
+    assert.deepEqual(steps[2].args, ['build.mjs']);
+    assert.equal(steps[2].cwd, path.join('/srv/app', 'artifacts', 'api-server'));
+
+    // 4. pm2 restart <DEPLOY_PROCESS>  5. pm2 status
+    assert.equal(steps[3].cmd, 'pm2');
+    assert.deepEqual(steps[3].args, ['restart', 'my-api']);
+    assert.equal(steps[4].cmd, 'pm2');
+    assert.deepEqual(steps[4].args, ['status']);
+  });
+
+  it('keeps the git-hardening flags on the deploy pull (F-OP-45 / F-LT-52)', () => {
+    const steps = appDeploySteps(LEGACY_CFG);
+    for (const flag of GIT_HARDENING_FLAGS) {
+      assert.ok(steps[0].args.includes(flag), `deploy pull must keep hardening flag ${flag}`);
+    }
+  });
+
+  it('never runs docker in legacy mode', () => {
+    assert.ok(appDeploySteps(LEGACY_CFG).every(s => s.cmd !== 'docker'));
+  });
+
+  it('DEPLOY_MODE unset defaults to legacy', () => {
+    assert.equal(appDeployConfig().mode, 'legacy');
+  });
+});
+
+describe('deploy — the pm2 process name is env-driven, never hardcoded', () => {
+  it('restarts whatever DEPLOY_PROCESS names', () => {
+    const steps = appDeploySteps({ ...LEGACY_CFG, process: 'servicecycle-worker' });
+    assert.deepEqual(steps[3].args, ['restart', 'servicecycle-worker']);
+    assert.match(steps[3].label, /pm2 restart servicecycle-worker/);
+  });
+
+  it('no droplet-specific process name is baked into the pipeline', () => {
+    const rendered = JSON.stringify(appDeploySteps({ ...LEGACY_CFG, process: 'placeholder' }));
+    assert.doesNotMatch(rendered, /sharpedge-api/);
+  });
+
+  it('legacy mode with DEPLOY_PROCESS unset throws an actionable error', () => {
+    assert.throws(
+      () => assertAppDeployConfigured({ ...LEGACY_CFG, process: '' }),
+      /DEPLOY_PROCESS is not set/,
+    );
+  });
+
+  it('the unset-DEPLOY_PROCESS error names both remedies', () => {
+    try {
+      assertAppDeployConfigured({ ...LEGACY_CFG, process: '' });
+      assert.fail('expected a throw');
+    } catch (e) {
+      assert.match((e as Error).message, /DEPLOY_PROCESS=/);
+      assert.match((e as Error).message, /DEPLOY_MODE=compose/);
+    }
+  });
+
+  it('the misconfiguration surfaces on dry_run too — not first at execute time', async () => {
+    await assert.rejects(
+      () => deployApp(true, 'preview an unconfigured legacy droplet', false, { ...LEGACY_CFG, process: '' }),
+      /DEPLOY_PROCESS is not set/,
+    );
+  });
+
+  it('compose mode does not require DEPLOY_PROCESS', () => {
+    assert.doesNotThrow(() => assertAppDeployConfigured(COMPOSE_CFG));
+  });
+});
+
+describe('deploy — compose mode runs docker compose up -d --build', () => {
+  it('produces git pull → compose up --build → compose ps', () => {
+    const steps = appDeploySteps(COMPOSE_CFG);
+    assert.equal(steps.length, 3);
+
+    // The pull still leads: `--build` builds from the working tree, so the new
+    // code has to land on disk first in compose mode too.
+    assert.equal(steps[0].cmd, 'git');
+    assert.deepEqual(steps[0].args.slice(-3), ['pull', 'origin', 'main']);
+
+    assert.equal(steps[1].cmd, 'docker');
+    assert.deepEqual(steps[1].args, [
+      'compose', '-f', '/root/ServiceCycle/docker-compose.yml', 'up', '-d', '--build', 'server',
+    ]);
+
+    assert.equal(steps[2].cmd, 'docker');
+    assert.deepEqual(steps[2].args, ['compose', '-f', '/root/ServiceCycle/docker-compose.yml', 'ps']);
+  });
+
+  it('the service defaults to "server" but follows DEPLOY_SERVICE', () => {
+    assert.equal(appDeployConfig().service, 'server');
+    const steps = appDeploySteps({ ...COMPOSE_CFG, service: 'api' });
+    assert.deepEqual(steps[1].args.slice(-4), ['up', '-d', '--build', 'api']);
+  });
+
+  it('uses COMPOSE_FILE — the same fixed, operator-set file as the app-ops tools', () => {
+    const steps = appDeploySteps({ ...COMPOSE_CFG, composeFile: '/opt/sc/compose.yml' });
+    assert.deepEqual(steps[1].args.slice(0, 3), ['compose', '-f', '/opt/sc/compose.yml']);
+  });
+
+  it('never runs pnpm / build.mjs / pm2 in compose mode', () => {
+    const rendered = JSON.stringify(appDeploySteps(COMPOSE_CFG));
+    assert.doesNotMatch(rendered, /pnpm/);
+    assert.doesNotMatch(rendered, /build\.mjs/);
+    assert.doesNotMatch(rendered, /pm2/);
+  });
+});
+
+describe('deploy — dry_run / confirm gates hold in both modes', () => {
+  it('dry_run previews the compose sequence and executes nothing', async () => {
+    const out = await deployApp(true, 'preview a compose deploy', false, COMPOSE_CFG);
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.match(out, /Deploy mode: compose/);
+    assert.match(out, /up -d --build server/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('dry_run previews the legacy sequence and executes nothing', async () => {
+    const out = await deployApp(true, 'preview a legacy deploy', false, LEGACY_CFG);
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.match(out, /Deploy mode: legacy/);
+    assert.match(out, /pnpm install/);
+    assert.match(out, /pm2 restart my-api/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('confirm:false (dry_run:false) returns a confirmation prompt, starts no job', async () => {
+    const out = await deployApp(false, 'deploy without confirming', false, COMPOSE_CFG);
+    assert.match(out, /CONFIRMATION REQUIRED/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('the confirmation prompt names the active mode and its target', async () => {
+    const compose = await deployApp(false, 'deploy without confirming', false, COMPOSE_CFG);
+    assert.match(compose, /Deploy mode:\s+compose/);
+    assert.match(compose, /service server/);
+
+    const legacy = await deployApp(false, 'deploy without confirming', false, LEGACY_CFG);
+    assert.match(legacy, /Deploy mode:\s+legacy/);
+    assert.match(legacy, /pm2 process my-api/);
+  });
+
+  it('description is still required (min 5 chars) in both modes', async () => {
+    await assert.rejects(() => deployApp(true, '', false, COMPOSE_CFG), /description is required/);
+    await assert.rejects(() => deployApp(true, 'hi', false, LEGACY_CFG), /description is required/);
+  });
+});
+
+describe('deploy — wired executeTool path (legacy, from .env.test)', () => {
+  it('dry_run defaults to true — a bare call previews, never deploys', async () => {
+    const out = await executeTool('deploy', { description: 'a bare deploy call' });
+    assert.match(out, /DRY RUN — nothing executed/);
+    assert.doesNotMatch(out, /job started/i);
+  });
+
+  it('previews the legacy pipeline with the env-configured process name', async () => {
+    const out = await executeTool('deploy', { description: 'preview via executeTool', dry_run: true });
+    assert.match(out, /Deploy mode: legacy/);
+    assert.match(out, new RegExp(`pm2 restart ${CONFIG.DEPLOY_PROCESS}`));
+    assert.doesNotMatch(out, /sharpedge-api/);
+  });
+
+  it('caller input cannot choose the mode, service, or process', async () => {
+    // executeTool reads only dry_run / description / confirm; these must be ignored.
+    const out = await executeTool('deploy', {
+      description: 'attempt to override the pipeline',
+      dry_run: true,
+      mode: 'compose',
+      deploy_mode: 'compose',
+      service: 'evil',
+      process: 'evil-proc',
+      compose_file: '/tmp/evil.yml',
+    } as Record<string, unknown>);
+    assert.match(out, /Deploy mode: legacy/);
+    assert.doesNotMatch(out, /evil/);
+  });
+
+  it('the deploy tool schema exposes only dry_run / description / confirm', () => {
+    const tool = TOOLS.find(t => t.name === 'deploy');
+    assert.ok(tool, 'deploy must be registered in TOOLS');
+    const props = Object.keys((tool as { inputSchema: { properties: Record<string, unknown> } }).inputSchema.properties);
+    assert.deepEqual(props.sort(), ['confirm', 'description', 'dry_run']);
+  });
+
+  it('the tool description no longer advertises a droplet-specific pipeline', () => {
+    const tool = TOOLS.find(t => t.name === 'deploy') as { description: string };
+    assert.doesNotMatch(tool.description, /sharpedge-api/);
+    assert.match(tool.description, /DEPLOY_MODE/);
   });
 });
 

@@ -3406,24 +3406,104 @@ async function runApprovedCommand(
 
 // ─── Deploy Tools ──────────────────────────────────────────────────────────────────
 
-async function deployApp(dryRun: boolean, description: string, confirm: boolean): Promise<string> {
+// The deploy pipeline is per-droplet config, not source. This server is shared by
+// several apps that build in different ways (pnpm/pm2 vs docker-compose), so the
+// sequence is selected by CONFIG.DEPLOY_MODE and every app-specific name in it
+// (pm2 process, compose service) comes from env. Same shape as clientDeployConfig
+// above: a config struct + a pure steps builder, so the dry-run preview, the
+// confirmation prompt, and the executor all read from one source of truth.
+
+interface AppDeployConfig {
+  mode:        'legacy' | 'compose';
+  appDir:      string;
+  composeFile: string;
+  service:     string; // compose mode — service passed to `up -d --build`
+  process:     string; // legacy mode — pm2 process to restart ('' = not configured)
+}
+
+function appDeployConfig(): AppDeployConfig {
+  return {
+    mode:        CONFIG.DEPLOY_MODE,
+    appDir:      CONFIG.APP_DIR,
+    composeFile: CONFIG.COMPOSE_FILE,
+    service:     CONFIG.DEPLOY_SERVICE,
+    process:     CONFIG.DEPLOY_PROCESS,
+  };
+}
+
+// Legacy mode ends in `pm2 restart <name>`. There is deliberately no fallback name:
+// guessing would restart whatever process a *different* droplet happens to call
+// that, so an unconfigured legacy droplet must fail loudly instead. Thrown before
+// any preview so dry_run surfaces the misconfiguration too.
+function assertAppDeployConfigured(cfg: AppDeployConfig): void {
+  if (cfg.mode === 'legacy' && !cfg.process) {
+    throw new Error(
+      'DEPLOY_PROCESS is not set. Legacy deploy mode ends by restarting a PM2 process, and the ' +
+      'process name is droplet-specific — this shared server never hardcodes one. Set ' +
+      'DEPLOY_PROCESS=<pm2-process-name> in this droplet\'s .env (e.g. DEPLOY_PROCESS=my-api), ' +
+      'or set DEPLOY_MODE=compose to deploy this droplet via docker compose instead.'
+    );
+  }
+}
+
+function appDeploySteps(cfg: AppDeployConfig): Array<{ label: string; cmd: string; args: string[]; cwd?: string }> {
+  // F-OP-45 / sixth-pass F-LT-52: deploy pull needs the same hardening as
+  // the user-facing gitPull tool — otherwise an attacker who plants hooks
+  // or a hostile core.sshCommand in the tracked repo gets RCE on next deploy.
+  // Identical first step in both modes: compose --build still builds from the
+  // working tree, so the new code has to land on disk first either way.
+  const pull = {
+    label: 'git pull origin main',
+    cmd:   'git',
+    args:  ['-C', cfg.appDir, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'],
+  };
+
+  if (cfg.mode === 'compose') {
+    const composeBase = ['compose', '-f', cfg.composeFile];
+    return [
+      pull,
+      {
+        label: `docker compose -f ${cfg.composeFile} up -d --build ${cfg.service}`,
+        cmd:   'docker',
+        args:  [...composeBase, 'up', '-d', '--build', cfg.service],
+      },
+      // Closing status readout — the compose-mode counterpart of `pm2 status`.
+      {
+        label: `docker compose -f ${cfg.composeFile} ps`,
+        cmd:   'docker',
+        args:  [...composeBase, 'ps'],
+      },
+    ];
+  }
+
+  // Legacy — byte-for-byte the pre-DEPLOY_MODE sequence, with the one exception
+  // that the pm2 process name now comes from cfg.process instead of a literal.
+  // Do not "clean up" this branch: droplets already deploying through it depend
+  // on these exact commands, cwds, and ordering.
+  const apiServerDir = path.join(cfg.appDir, 'artifacts', 'api-server');
+  return [
+    pull,
+    { label: 'pnpm install',                 cmd: 'pnpm', args: ['install'],                cwd: cfg.appDir  },
+    { label: 'node build.mjs',               cmd: 'node', args: ['build.mjs'],              cwd: apiServerDir },
+    { label: `pm2 restart ${cfg.process}`,   cmd: 'pm2',  args: ['restart', cfg.process]                      },
+    { label: 'pm2 status',                   cmd: 'pm2',  args: ['status']                                    },
+  ];
+}
+
+async function deployApp(
+  dryRun: boolean,
+  description: string,
+  confirm: boolean,
+  cfgOverride?: AppDeployConfig,
+): Promise<string> {
   capString(description ?? '', INPUT_LIMITS.description, 'description');
   if (!description || description.trim().length < 5) {
     throw new Error('description is required (min 5 chars) — describe what is being deployed.');
   }
 
-  const apiServerDir = path.join(CONFIG.APP_DIR, 'artifacts', 'api-server');
-
-  const steps: Array<{ label: string; cmd: string; args: string[]; cwd?: string }> = [
-    // F-OP-45 / sixth-pass F-LT-52: deploy pull needs the same hardening as
-    // the user-facing gitPull tool — otherwise an attacker who plants hooks
-    // or a hostile core.sshCommand in the tracked repo gets RCE on next deploy.
-    { label: 'git pull origin main', cmd: 'git',  args: ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'pull', 'origin', 'main'] },
-    { label: 'pnpm install',         cmd: 'pnpm', args: ['install'],     cwd: CONFIG.APP_DIR            },
-    { label: 'node build.mjs',       cmd: 'node', args: ['build.mjs'],   cwd: apiServerDir              },
-    { label: 'pm2 restart sharpedge-api', cmd: 'pm2',  args: ['restart', 'sharpedge-api']                              },
-    { label: 'pm2 status',           cmd: 'pm2',  args: ['status']                                      },
-  ];
+  const cfg = cfgOverride ?? appDeployConfig();
+  assertAppDeployConfigured(cfg);
+  const steps = appDeploySteps(cfg);
 
   if (dryRun) {
     const stepList = steps.map((s, i) =>
@@ -3432,6 +3512,7 @@ async function deployApp(dryRun: boolean, description: string, confirm: boolean)
     return [
       'DRY RUN — nothing executed.',
       'Description: ' + description,
+      `Deploy mode: ${cfg.mode}`,
       '',
       'Would run the following deploy sequence:',
       stepList,
@@ -3445,7 +3526,7 @@ async function deployApp(dryRun: boolean, description: string, confirm: boolean)
     // Fetch last commit for the summary
     let lastCommit = '(unavailable)';
     try {
-      const { stdout } = await exec('git', ['-C', CONFIG.APP_DIR, ...GIT_HARDENING_FLAGS, 'log', '--oneline', '-1']);
+      const { stdout } = await exec('git', ['-C', cfg.appDir, ...GIT_HARDENING_FLAGS, 'log', '--oneline', '-1']);
       lastCommit = stdout.trim() || '(no commits)';
     } catch { /* non-fatal */ }
 
@@ -3454,7 +3535,11 @@ async function deployApp(dryRun: boolean, description: string, confirm: boolean)
       '',
       'This deploy pipeline requires explicit per-invocation confirmation before execution.',
       '',
-      `Target directory:  ${CONFIG.APP_DIR}`,
+      `Target directory:  ${cfg.appDir}`,
+      `Deploy mode:       ${cfg.mode}` +
+        (cfg.mode === 'compose'
+          ? ` (compose file ${cfg.composeFile}, service ${cfg.service})`
+          : ` (pm2 process ${cfg.process})`),
       `Last commit:       ${lastCommit}`,
       `Description:       ${description}`,
       '',
@@ -3467,7 +3552,7 @@ async function deployApp(dryRun: boolean, description: string, confirm: boolean)
   }
 
   // Log the confirmed deploy event to the audit trail
-  logDeployConfirmation('deploy', description, CONFIG.APP_DIR);
+  logDeployConfirmation('deploy', description, cfg.appDir);
 
   const jobId = startDeployJob('app', description, steps);
   const stepList = steps.map((s, i) => '  ' + (i + 1) + '. ' + s.label).join('\n');
@@ -4291,7 +4376,7 @@ export const TOOLS = [
   {
     name: 'deploy',
     annotations: { title: 'Deploy Application', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    description: 'Deploy the configured application at APP_DIR on this VM. Runs: git pull -> pnpm install -> node build.mjs -> pm2 restart sharpedge-api -> pm2 status. Works on any cloud VM (AWS, GCP, Azure, DigitalOcean, self-hosted). Always dry_run=true first to preview. USE THIS — never ask the user to run deploy commands themselves one-by-one. After a successful deploy, call get_recent_errors to catch build-time failures early.',
+    description: 'Deploy the configured application at APP_DIR on this VM. The pipeline is set per-droplet by the DEPLOY_MODE env var: "legacy" runs git pull -> pnpm install -> node build.mjs -> pm2 restart $DEPLOY_PROCESS -> pm2 status; "compose" runs git pull -> docker compose -f $COMPOSE_FILE up -d --build $DEPLOY_SERVICE -> docker compose ps. Works on any cloud VM (AWS, GCP, Azure, DigitalOcean, self-hosted). Always dry_run=true first to preview — the preview names the active mode and the exact commands. USE THIS — never ask the user to run deploy commands themselves one-by-one. After a successful deploy, call get_recent_errors to catch build-time failures early.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4513,6 +4598,11 @@ export const __TEST_ONLY = {
   validateNodeArgs,
   validateNpmArgs,
   validatePm2Args,
+  // deploy — env-selected pipeline (legacy pnpm/pm2 vs docker compose)
+  deployApp,
+  appDeploySteps,
+  appDeployConfig,
+  assertAppDeployConfigured,
   // deploy_client — fixed-destination client build + publish
   deployClient,
   clientDeploySteps,

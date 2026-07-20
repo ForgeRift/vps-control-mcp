@@ -89,6 +89,26 @@ function validateClientWebRoot(raw: string | undefined): string {
   return v;
 }
 
+// ── deploy tool pipeline mode ────────────────────────────────────────────────
+// This server is shared across droplets whose apps build in different ways, so the
+// `deploy` tool's pipeline is selected by env rather than baked into source.
+//   legacy  — git pull → pnpm install → node build.mjs → pm2 restart → pm2 status
+//   compose — git pull → docker compose up -d --build <service> → docker compose ps
+// Unset defaults to 'legacy': a droplet that upgrades this MCP without adding any
+// new env keeps byte-for-byte the pipeline it had before DEPLOY_MODE existed.
+function validateDeployMode(raw: string | undefined): 'legacy' | 'compose' {
+  const v = (raw || '').trim().toLowerCase();
+  if (!v) return 'legacy';
+  if (v !== 'legacy' && v !== 'compose') {
+    throw new Error(
+      `DEPLOY_MODE "${raw}" is invalid. Valid values: ` +
+      `"legacy" (pnpm install → node build.mjs → pm2 restart) or ` +
+      `"compose" (docker compose up -d --build). Leave unset for "legacy".`
+    );
+  }
+  return v;
+}
+
 export const CONFIG = {
   PORT:           parseInt(process.env.PORT || '3001'),
   // APP_DIR is the absolute path to the user's application on this VM — the
@@ -151,6 +171,19 @@ export const CONFIG = {
   // enum whitelist, and the compose file is fixed here. Defaults to the standard
   // ServiceCycle location; override via COMPOSE_FILE only if the droplet differs.
   COMPOSE_FILE:        process.env.COMPOSE_FILE        || '/root/ServiceCycle/docker-compose.yml',
+
+  // ── deploy tool pipeline (per-droplet; see validateDeployMode above) ─────────
+  // DEPLOY_MODE picks which sequence the `deploy` tool runs. Defaults to 'legacy'
+  // so existing droplets are unaffected by an upgrade that adds no new env.
+  DEPLOY_MODE:         validateDeployMode(process.env.DEPLOY_MODE),
+  // compose mode: the service rebuilt by `docker compose -f $COMPOSE_FILE up -d
+  // --build <service>`, inside the COMPOSE_FILE project above.
+  DEPLOY_SERVICE:      process.env.DEPLOY_SERVICE      || 'server',
+  // legacy mode: the PM2 process restarted at the end of the pipeline. NO DEFAULT
+  // on purpose — the process name is droplet-specific and must never be a literal
+  // in shared source. A legacy deploy fails fast with an actionable message when
+  // this is unset rather than restarting some other droplet's process name.
+  DEPLOY_PROCESS:      (process.env.DEPLOY_PROCESS      || '').trim(),
 
   // ── Read-only diagnostic dirs (NGINX-DIAG 2026-07-18) ───────────────────────────────────────────
   // nginx config + host logs, so `nginx -T`, `cat /etc/nginx/...`, and
