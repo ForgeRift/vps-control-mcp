@@ -698,6 +698,8 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   // NGINX-DIAG: the blanket /var/log/ block is intentionally gone — CONFIG.HOST_LOG_DIR is
   // an ALLOWED_READ_DIRS entry so nginx + sc-auth-guard logs are readable. Files in
   // it still pass the credential-name patterns above.
+  /\/access\.log$/i,                 // F-READ-01: web/nginx access logs (URLs carry tokens/reset links)
+  /\/auth\.log$/i,                   // F-READ-01: auth/SSH logs (usernames, IPs) - defense-in-depth
   /\/proc\//,                         // /proc — kernel VFS
   /\/sys\//,                          // /sys — kernel VFS
   // Seventh-pass Opus note: AUDIT_LOG_PATH defaults to /root/mcp-audit.log and is

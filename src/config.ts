@@ -193,7 +193,7 @@ export const CONFIG = {
   // credential-name patterns in SENSITIVE_FILE_PATTERNS (*.key, *.pem, *password*,
   // *token*, *credentials*, .htpasswd, ...) still apply INSIDE these directories.
   NGINX_CONF_DIR:      process.env.NGINX_CONF_DIR      || '/etc/nginx',
-  HOST_LOG_DIR:        process.env.HOST_LOG_DIR        || '/var/log',
+  HOST_LOG_DIR:        process.env.HOST_LOG_DIR        || '/var/log/nginx', // F-READ-01: nginx logs only (was /var/log)
 };
 
 // Derived — do not edit directly

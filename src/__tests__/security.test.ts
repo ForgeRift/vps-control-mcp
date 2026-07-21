@@ -2248,3 +2248,10 @@ describe('app-ops — dispatcher routing (no "Unknown tool" fallback)', () => {
     }
   });
 });
+
+describe('F-READ-01 - auth.log / access.log stay blocked inside /var/log', () => {
+  const matchesReadPattern = (p: string) => SENSITIVE_FILE_PATTERNS.some((r: RegExp) => r.test(p));
+  it('auth.log (SSH usernames/IPs) is blocked', () => assert.ok(matchesReadPattern('/var/log/auth.log')));
+  it('nginx access.log (tokenized URLs) is blocked', () => assert.ok(matchesReadPattern('/var/log/nginx/access.log')));
+  it('nginx error.log stays readable for diagnostics', () => assert.ok(!matchesReadPattern('/var/log/nginx/error.log')));
+});
